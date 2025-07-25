@@ -1,0 +1,151 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS Variables for theming */
+:root {
+  --toast-bg: #363636;
+  --toast-color: #fff;
+}
+
+:root.dark {
+  --toast-bg: #374151;
+  --toast-color: #f9fafb;
+}
+
+/* Force dark mode backgrounds */
+.dark {
+  background-color: #111827 !important;
+  color: #f9fafb !important;
+}
+
+.dark .dark\:bg-gray-900 {
+  background-color: #111827 !important;
+}
+
+.dark .dark\:\!bg-gray-900 {
+  background-color: #111827 !important;
+}
+
+/* Force specific elements in dark mode */
+.dark div[class*="bg-white"] {
+  background-color: #374151 !important;
+}
+
+.dark div[class*="h-full"][class*="flex"] {
+  background-color: #111827 !important;
+}
+
+/* Force text colors in dark mode */
+.dark .text-gray-500 {
+  color: #d1d5db !important;
+}
+
+.dark .text-gray-600 {
+  color: #e5e7eb !important;
+}
+
+.dark .text-gray-900 {
+  color: #f9fafb !important;
+}
+
+/* 
+* These styles were added to improve the appearance of the example pages.
+* It is safe to delete them, and they are not intended to be used by Refine components.
+*/
+@layer base {
+  input {
+    @apply border border-gray-300 dark:border-gray-600 rounded-sm dark:bg-gray-700 dark:text-white;
+  }
+
+  input[type="submit"] {
+    @apply bg-[#EFEFEF] dark:bg-gray-700 dark:text-white;
+  }
+
+  button {
+    @apply border border-gray-300 dark:border-gray-600 px-2 rounded-sm bg-[#EFEFEF] dark:bg-gray-700 dark:text-white;
+  }
+
+  h1 {
+    @apply text-2xl font-bold my-6;
+  }
+
+  ul {
+    @apply list-disc my-4;
+  }
+
+  a {
+    @apply text-blue-700 dark:text-blue-400 underline;
+  }
+
+  label {
+    @apply text-sm font-medium;
+  }
+
+  body {
+    @apply m-0 bg-white dark:bg-gray-900;
+  }
+
+  table {
+    @apply border border-black border-collapse;
+  }
+
+  table th,
+  table td {
+    @apply m-0 p-2 border-b border-r border-black;
+  }
+
+  table tr:last-child td {
+    @apply border-b-0;
+  }
+
+  table th:last-child,
+  table td:last-child {
+    @apply border-r-0;
+  }
+
+  .layout {
+    @apply flex gap-4;
+  }
+
+  @media (max-width: 751px) {
+    .layout {
+      @apply block;
+    }
+  }
+
+  .layout .content {
+    @apply flex flex-col flex-grow;
+  }
+
+  .breadcrumb {
+    @apply flex gap-6 p-2 px-4 border-b border-gray-300;
+    list-style-type: "/ ";
+  }
+
+  .breadcrumb a {
+    @apply text-blue-700 dark:text-blue-400 no-underline;
+  }
+
+  .menu {
+    @apply flex-shrink-0 p-2 pr-4 border-r border-gray-300;
+  }
+
+  .menu a {
+    @apply text-black dark:text-white;
+  }
+
+  .menu .active {
+    @apply font-bold;
+  }
+
+  @media (max-width: 751px) {
+    .menu {
+      @apply border-r-0 border-b border-gray-300;
+    }
+  }
+
+  .menu ul {
+    @apply pl-4;
+  }
+}
