@@ -26,3 +26,14 @@ _.sln
 \*.sw?
 data/**
 manticore.yml
+
+
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv
+server/.venv/**
+models/**
