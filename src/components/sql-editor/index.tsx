@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useCustomMutation } from "@refinedev/core";
 import { SqlResponse } from "../../types/manticore";
+import { getSqlEndpoint, getSqlPayload } from "../../utils/sql-routing";
 
 interface SqlEditorProps {
   onQueryExecuted?: (results: SqlResponse[]) => void;
@@ -18,14 +19,14 @@ export const SqlEditor: React.FC<SqlEditorProps> = ({ onQueryExecuted }) => {
 
     setError(null);
 
+    const endpoint = getSqlEndpoint(query);
+    const payload = getSqlPayload(query, true);
+
     executeQuery(
       {
-        url: "/sql",
+        url: endpoint,
         method: "post",
-        values: {
-          query: query.trim(),
-          raw_response: true,
-        },
+        values: payload,
       },
       {
         onSuccess: (data: any) => {

@@ -41,9 +41,9 @@
     "build": "tsc && refine build",
     "start": "refine start",
     "refine": "refine",
-    "server:install": "npm install --prefix . --package-lock-only=false express cors http-proxy-middleware nodemon",
-    "server:start": "node server.js",
-    "server:dev": "nodemon server.js",
+    "server:install": "pip install -r server/requirements.txt",
+    "server:start": "cd server && python run.py",
+    "server:dev": "cd server && python run.py",
     "dev:full": "concurrently \"npm run server:dev\" \"npm run dev\""
   },
   "browserslist": {

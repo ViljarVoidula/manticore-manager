@@ -71,11 +71,10 @@ export const TableManager: React.FC = () => {
 
           deleteTable(
             {
-              url: "/sql",
+              url: "/cli_json",
               method: "post",
               values: {
-                query: `DROP TABLE ${tableName}`,
-                raw_response: true,
+                command: `DROP TABLE ${tableName}`,
               },
             },
             {

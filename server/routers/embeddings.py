@@ -150,5 +150,100 @@ async def get_model_info(model_name: str):
         )
 
 
+# Vector column management routes
+vector_router = APIRouter(prefix="/vector-columns", tags=["vector-columns"])
+
+
+@vector_router.post("/register")
+async def register_vector_column(
+    table_name: str,
+    column_name: str,
+    model_name: str,
+    knn_type: str = "HNSW",
+    similarity_metric: str = "L2",
+    combined_fields: dict = None
+):
+    """Register a vector column with its model and settings.
+    
+    combined_fields example:
+    {
+        "weights": {"image_field": 0.6, "text_field": 0.4}
+    }
+    """
+    try:
+        await model_manager.save_vector_column_metadata(
+            table_name=table_name,
+            column_name=column_name,
+            model_name=model_name,
+            knn_type=knn_type,
+            similarity_metric=similarity_metric,
+            combined_fields=combined_fields
+        )
+        return {
+            "message": f"Vector column {table_name}.{column_name} registered successfully",
+            "table_name": table_name,
+            "column_name": column_name,
+            "model_name": model_name,
+            "dimensions": model_manager.get_model_dimensions(model_name),
+            "knn_type": knn_type,
+            "similarity_metric": similarity_metric,
+            "combined_fields": combined_fields
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@vector_router.get("/tables")
+async def list_vector_tables():
+    """List all tables with vector columns."""
+    try:
+        tables = await model_manager.list_vector_tables()
+        return {"tables": tables}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@vector_router.get("/tables/{table_name}/columns")
+async def get_table_vector_columns(table_name: str):
+    """Get all vector columns for a specific table."""
+    try:
+        columns = await model_manager.get_table_vector_columns(table_name)
+        return {"table_name": table_name, "vector_columns": columns}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@vector_router.get("/tables/{table_name}/columns/{column_name}")
+async def get_vector_column_info(table_name: str, column_name: str):
+    """Get information about a specific vector column."""
+    try:
+        column_info = await model_manager.get_vector_column_metadata(table_name, column_name)
+        if not column_info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Vector column {table_name}.{column_name} not found"
+            )
+        return column_info
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 # Include the models router in the main embeddings router
 router.include_router(models_router)
+
+# Include the vector router in the main embeddings router
+router.include_router(vector_router)

@@ -10,6 +10,7 @@ import uvicorn
 
 from .config import settings
 from .routers.embeddings import router as embeddings_router
+from .services.database_init import database_initializer
 
 
 # Configure logging
@@ -144,6 +145,13 @@ async def startup_event():
     logger.info(f"ReDoc Documentation available at http://{settings.host}:{settings.port}/redoc")
     logger.info(f"Proxying to Manticore Search at {settings.manticore_host}:{settings.manticore_port}")
     logger.info(f"CORS origins: {settings.cors_origins}")
+    
+    # Initialize database tables
+    try:
+        await database_initializer.initialize_database()
+    except Exception as e:
+        logger.error(f"Database initialization failed: {str(e)}")
+        # Don't fail startup if database init fails, just log the error
 
 
 @app.on_event("shutdown")

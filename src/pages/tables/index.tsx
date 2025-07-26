@@ -3,6 +3,7 @@ import { useCustomMutation, useCreate, useUpdate, useDelete, useList, BaseRecord
 import { useParams, useNavigate, useSearchParams } from "react-router";
 import { TableInfo } from "../../types/manticore";
 import { TableCreator } from "../../components/table-creator/TableCreator";
+import { TableSchemaEditor } from "../../components/table-schema-editor";
 import { toastMessages } from "../../utils/toast";
 
 interface Document extends BaseRecord {
@@ -18,6 +19,7 @@ export const TablesPage: React.FC = () => {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showSchemaEditor, setShowSchemaEditor] = useState(false);
   
   const { tableId } = useParams();
   const navigate = useNavigate();
@@ -115,9 +117,9 @@ export const TablesPage: React.FC = () => {
         return new Promise<void>((resolve, reject) => {
           deleteTable(
             {
-              url: "/sql",
+              url: "/cli_json",
               method: "post",
-              values: { query: `DROP TABLE ${tableName}` },
+              values: { command: `DROP TABLE ${tableName}` },
             },
             {
               onSuccess: () => {
@@ -274,6 +276,14 @@ export const TablesPage: React.FC = () => {
     refetchDocuments();
   };
 
+  const handleTableUpdated = (updatedTable: TableInfo) => {
+    setSelectedTable(updatedTable);
+    // Update the table in the tables list as well
+    setTables(prev => prev.map(table => 
+      table.name === updatedTable.name ? updatedTable : table
+    ));
+  };
+
   const renderFormField = (column: { field: string; type: string }) => {
     const value = formData[column.field] || '';
 
@@ -285,7 +295,7 @@ export const TablesPage: React.FC = () => {
             type="number"
             value={String(value)}
             onChange={(e) => handleInputChange(column.field, parseInt(e.target.value) || 0)}
-            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         );
       case 'float':
@@ -295,7 +305,7 @@ export const TablesPage: React.FC = () => {
             step="any"
             value={String(value)}
             onChange={(e) => handleInputChange(column.field, parseFloat(e.target.value) || 0)}
-            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         );
       case 'bool':
@@ -303,7 +313,7 @@ export const TablesPage: React.FC = () => {
           <select
             value={String(value)}
             onChange={(e) => handleInputChange(column.field, e.target.value === 'true')}
-            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="false">False</option>
             <option value="true">True</option>
@@ -323,9 +333,9 @@ export const TablesPage: React.FC = () => {
                 }
               }}
               placeholder="Enter valid JSON"
-              className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent h-32 font-mono text-sm"
+              className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent h-32 font-mono text-sm"
             />
-            <div className="mt-1 text-xs text-gray-500">
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               💡 Make sure your JSON is properly formatted
             </div>
           </div>
@@ -336,40 +346,48 @@ export const TablesPage: React.FC = () => {
             type="text"
             value={String(value)}
             onChange={(e) => handleInputChange(column.field, e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         );
     }
   };
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-screen flex flex-col bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
+      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 lg:px-6 py-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl lg:text-2xl font-bold text-gray-900 dark:text-white truncate">
               {tableId ? `Table: ${tableId}` : 'Tables'}
             </h1>
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="text-xs lg:text-sm text-gray-500 dark:text-gray-400 mt-1">
               {tableId 
                 ? `Manage data in the ${tableId} table`
                 : 'Manage your Manticore Search tables'
               }
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {!tableId && (
               <button
                 onClick={() => navigate('/tables?create=true')}
-                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                className="px-3 lg:px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-sm lg:text-base"
               >
                 Create Table
               </button>
             )}
+            {tableId && selectedTable && (
+              <button
+                onClick={() => setShowSchemaEditor(true)}
+                className="px-3 lg:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
+              >
+                Edit Schema
+              </button>
+            )}
             <button
               onClick={loadTables}
-              className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+              className="px-3 lg:px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
             >
               Refresh
             </button>
@@ -378,16 +396,16 @@ export const TablesPage: React.FC = () => {
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Tables Sidebar */}
-        <div className="w-80 bg-white border-r border-gray-200 overflow-y-auto">
+        {/* Tables Sidebar - Hidden on mobile, shown as overlay when needed */}
+        <div className="hidden lg:block lg:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
           <div className="p-4">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Available Tables</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Available Tables</h2>
             {tables.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-gray-500 mb-4">No tables found</p>
+                <p className="text-gray-500 dark:text-gray-400 mb-4">No tables found</p>
                 <button
                   onClick={() => navigate('/tables?create=true')}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"
                 >
                   Create Your First Table
                 </button>
@@ -399,15 +417,15 @@ export const TablesPage: React.FC = () => {
                     key={table.name}
                     className={`p-3 rounded-lg border cursor-pointer transition-colors ${
                       tableId === table.name
-                        ? 'bg-blue-50 border-blue-200'
-                        : 'hover:bg-gray-50 border-gray-200'
+                        ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-600'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700 border-gray-200 dark:border-gray-600'
                     }`}
                     onClick={() => handleTableSelect(table.name)}
                   >
                     <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="font-medium text-gray-900">{table.name}</h3>
-                        <p className="text-sm text-gray-500">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-medium text-gray-900 dark:text-white truncate">{table.name}</h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
                           {table.columns?.length || 0} columns
                         </p>
                       </div>
@@ -416,7 +434,7 @@ export const TablesPage: React.FC = () => {
                           e.stopPropagation();
                           handleDeleteTable(table.name);
                         }}
-                        className="text-red-500 hover:text-red-700 text-sm"
+                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 text-sm ml-2 flex-shrink-0"
                       >
                         Delete
                       </button>
@@ -428,159 +446,270 @@ export const TablesPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Mobile Table Selector */}
+        {!tableId && (
+          <div className="lg:hidden flex-1 p-4">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Select a Table</h2>
+              {tables.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="text-4xl mb-4">🗂️</div>
+                  <p className="text-gray-500 dark:text-gray-400 mb-4">No tables found</p>
+                  <button
+                    onClick={() => navigate('/tables?create=true')}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"
+                  >
+                    Create Your First Table
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {tables.map((table) => (
+                    <div
+                      key={table.name}
+                      className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      onClick={() => handleTableSelect(table.name)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-medium text-gray-900 dark:text-white truncate">{table.name}</h3>
+                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                            {table.columns?.length || 0} columns
+                          </p>
+                        </div>
+                        <div className="flex items-center space-x-2 ml-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTableSelect(table.name);
+                            }}
+                            className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteTable(table.name);
+                            }}
+                            className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Main Content */}
-        <div className="flex-1 overflow-hidden">
-          {!tableId ? (
-            <div className="flex items-center justify-center h-full">
+        {!tableId ? (
+          <div className="hidden lg:flex flex-1 overflow-hidden bg-white dark:bg-gray-800">
+            <div className="flex items-center justify-center h-full w-full">
               <div className="text-center">
                 <div className="text-6xl mb-4">🗂️</div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">Select a Table</h2>
-                <p className="text-gray-500 mb-4">Choose a table from the sidebar to view and manage its data</p>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Select a Table</h2>
+                <p className="text-gray-500 dark:text-gray-400 mb-4">Choose a table from the sidebar to view and manage its data</p>
                 <button
                   onClick={() => navigate('/tables?create=true')}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"
                 >
                   Create New Table
                 </button>
               </div>
             </div>
-          ) : (
-            <div className="h-full flex flex-col">
-              {/* Table Data Header */}
-              <div className="bg-white border-b border-gray-200 px-6 py-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900">Table Data</h2>
-                    {documentsData && (
-                      <p className="text-sm text-gray-500">
-                        {documentsData.total} documents total
-                      </p>
-                    )}
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800">
+            {/* Back button for mobile */}
+            <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-2">
+              <button
+                onClick={() => navigate('/tables')}
+                className="flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200"
+              >
+                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                Back to Tables
+              </button>
+            </div>
+
+            {/* Table Data Header */}
+            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 lg:px-6 py-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h2 className="text-base lg:text-lg font-semibold text-gray-900 dark:text-white">Table Data</h2>
+                  {documentsData && (
+                    <p className="text-xs lg:text-sm text-gray-500 dark:text-gray-400">
+                      {documentsData.total} documents total
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCreateDocument}
+                    className="px-3 lg:px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-sm lg:text-base"
+                  >
+                    Add Document
+                  </button>
+                </div>
+              </div>
+
+              {/* Search */}
+              <form onSubmit={handleSearch} className="mt-4">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Search documents..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm lg:text-base"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3 lg:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
+                  >
+                    Search
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Documents Table */}
+            <div className="flex-1 overflow-auto p-4 lg:p-6 bg-white dark:bg-gray-800">
+              {documentsData && documentsData.data.length > 0 ? (
+                <div>
+                  {/* Mobile: Card layout, Desktop: Table layout */}
+                  <div className="lg:hidden space-y-4">
+                    {documentsData.data.map((document, index) => (
+                      <div
+                        key={`doc-${document.id || 'no-id'}-${index}`}
+                        className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg border border-gray-200 dark:border-gray-600"
+                      >
+                        {selectedTable?.columns?.map((column) => (
+                          <div key={column.field} className="mb-2 last:mb-0">
+                            <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                              {column.field}:
+                            </span>
+                            <div className="text-sm text-gray-900 dark:text-gray-100 mt-1 break-words">
+                              {typeof document[column.field] === 'object'
+                                ? JSON.stringify(document[column.field])
+                                : String(document[column.field] || '')}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                          <button
+                            onClick={() => handleEditDocument(document as Document)}
+                            className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-xs"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => document.id && handleDeleteDocument(document.id)}
+                            className="px-3 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-xs"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="flex gap-2">
+
+                  {/* Desktop table view */}
+                  <div className="hidden lg:block overflow-x-auto">
+                    <table className="min-w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+                      <thead className="bg-gray-50 dark:bg-gray-700">
+                        <tr>
+                          {selectedTable?.columns?.map((column) => (
+                            <th
+                              key={column.field}
+                              className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600"
+                            >
+                              {column.field}
+                            </th>
+                          ))}
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600">
+                            Actions
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                        {documentsData.data.map((document, index) => (
+                          <tr key={`doc-${document.id || 'no-id'}-${index}`} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                            {selectedTable?.columns?.map((column) => (
+                              <td
+                                key={column.field}
+                                className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100 border-b border-gray-200 dark:border-gray-700 max-w-xs truncate"
+                              >
+                                {typeof document[column.field] === 'object'
+                                  ? JSON.stringify(document[column.field])
+                                  : String(document[column.field] || '')}
+                              </td>
+                            ))}
+                            <td className="px-4 py-2 text-sm border-b border-gray-200 dark:border-gray-700">
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleEditDocument(document as Document)}
+                                  className="px-2 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-xs"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => document.id && handleDeleteDocument(document.id)}
+                                  className="px-2 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-xs"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  <div className="mt-4 flex flex-col sm:flex-row justify-between items-center gap-4">
                     <button
-                      onClick={handleCreateDocument}
-                      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                      disabled={currentPage === 1}
+                      className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
                     >
-                      Add Document
+                      Previous
+                    </button>
+                    <span className="text-xs lg:text-sm text-gray-600 dark:text-gray-400">
+                      Page {currentPage}
+                    </span>
+                    <button
+                      onClick={() => setCurrentPage(currentPage + 1)}
+                      disabled={!documentsData || documentsData.data.length < 10}
+                      className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
+                    >
+                      Next
                     </button>
                   </div>
                 </div>
-
-                {/* Search */}
-                <form onSubmit={handleSearch} className="mt-4">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Search documents..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                    >
-                      Search
-                    </button>
-                  </div>
-                </form>
-              </div>
-
-              {/* Documents Table */}
-              <div className="flex-1 overflow-auto p-6">
-                {documentsData && documentsData.data.length > 0 ? (
-                  <div>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full bg-white border border-gray-200">
-                        <thead className="bg-gray-50">
-                          <tr>
-                            {selectedTable?.columns?.map((column) => (
-                              <th
-                                key={column.field}
-                                className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b"
-                              >
-                                {column.field}
-                              </th>
-                            ))}
-                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">
-                              Actions
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {documentsData.data.map((document, index) => (
-                            <tr key={document.id || index} className="hover:bg-gray-50">
-                              {selectedTable?.columns?.map((column) => (
-                                <td
-                                  key={column.field}
-                                  className="px-4 py-2 text-sm text-gray-900 border-b max-w-xs truncate"
-                                >
-                                  {typeof document[column.field] === 'object'
-                                    ? JSON.stringify(document[column.field])
-                                    : String(document[column.field] || '')}
-                                </td>
-                              ))}
-                              <td className="px-4 py-2 text-sm border-b">
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleEditDocument(document as Document)}
-                                    className="px-2 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-xs"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => document.id && handleDeleteDocument(document.id)}
-                                    className="px-2 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 text-xs"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Pagination */}
-                    <div className="mt-4 flex justify-between items-center">
-                      <button
-                        onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                        disabled={currentPage === 1}
-                        className="px-4 py-2 border border-gray-300 rounded-md disabled:bg-gray-100 disabled:cursor-not-allowed hover:bg-gray-50"
-                      >
-                        Previous
-                      </button>
-                      <span className="text-sm text-gray-600">
-                        Page {currentPage}
-                      </span>
-                      <button
-                        onClick={() => setCurrentPage(currentPage + 1)}
-                        disabled={!documentsData || documentsData.data.length < 10}
-                        className="px-4 py-2 border border-gray-300 rounded-md disabled:bg-gray-100 disabled:cursor-not-allowed hover:bg-gray-50"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-12">
-                    <div className="text-4xl mb-4">📄</div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">No Documents</h3>
-                    <p className="text-gray-500 mb-4">This table doesn't have any documents yet</p>
-                    <button
-                      onClick={handleCreateDocument}
-                      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                    >
-                      Add First Document
-                    </button>
-                  </div>
-                )}
-              </div>
+              ) : (
+                <div className="text-center py-12">
+                  <div className="text-4xl mb-4">📄</div>
+                  <h3 className="text-base lg:text-lg font-semibold text-gray-900 dark:text-white mb-2">No Documents</h3>
+                  <p className="text-gray-500 dark:text-gray-400 mb-4 text-sm lg:text-base">This table doesn't have any documents yet</p>
+                  <button
+                    onClick={handleCreateDocument}
+                    className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
+                  >
+                    Add First Document
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Table Creator Modal */}
@@ -595,11 +724,11 @@ export const TablesPage: React.FC = () => {
 
       {/* Document Form Modal */}
       {showCreateDocumentForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-4 lg:p-6">
+              <div className="flex items-center justify-between mb-4 lg:mb-6">
+                <h3 className="text-lg lg:text-xl font-bold text-gray-900 dark:text-white">
                   {editingDocument ? 'Edit Document' : 'Create Document'}
                 </h3>
                 <button
@@ -607,18 +736,18 @@ export const TablesPage: React.FC = () => {
                     setShowCreateDocumentForm(false);
                     setEditingDocument(null);
                   }}
-                  className="text-gray-500 hover:text-gray-700"
+                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 p-1"
                 >
                   ✕
                 </button>
               </div>
 
-              <form onSubmit={handleSubmitDocument} className="space-y-4">
+              <form onSubmit={handleSubmitDocument} className="space-y-3 lg:space-y-4">
                 {selectedTable?.columns
                   ?.filter(column => column.field !== 'id' || editingDocument)
                   .map((column) => (
                     <div key={column.field}>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                         {column.field} ({column.type})
                         {column.field === 'id' && editingDocument && ' (read-only)'}
                       </label>
@@ -627,7 +756,7 @@ export const TablesPage: React.FC = () => {
                           type="text"
                           value={String(formData[column.field] || '')}
                           disabled
-                          className="w-full p-2 border border-gray-300 rounded-md bg-gray-100"
+                          className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100 text-sm lg:text-base"
                         />
                       ) : (
                         renderFormField(column)
@@ -635,20 +764,20 @@ export const TablesPage: React.FC = () => {
                     </div>
                   ))}
 
-                <div className="flex justify-end gap-3 pt-4">
+                <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
                   <button
                     type="button"
                     onClick={() => {
                       setShowCreateDocumentForm(false);
                       setEditingDocument(null);
                     }}
-                    className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+                    className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                    className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
                   >
                     {editingDocument ? 'Update' : 'Create'}
                   </button>
@@ -657,6 +786,15 @@ export const TablesPage: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Schema Editor Modal */}
+      {showSchemaEditor && selectedTable && (
+        <TableSchemaEditor
+          table={selectedTable}
+          onClose={() => setShowSchemaEditor(false)}
+          onTableUpdated={handleTableUpdated}
+        />
       )}
     </div>
   );

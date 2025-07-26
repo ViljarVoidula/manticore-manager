@@ -7,9 +7,21 @@ export default defineConfig({
     port: 7600,
     proxy: {
       '/manticore': {
-        target: 'http://127.0.0.1:9308',
+        target: 'http://127.0.0.1:3001',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/manticore/, ''),
+        rewrite: (path) => path.replace(/^\/manticore/, '/api'),
+      },
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+      '/sql': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+      '/embeddings': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
       },
     },
   },

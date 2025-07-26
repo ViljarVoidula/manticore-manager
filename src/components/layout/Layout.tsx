@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import { useMenu, useNavigation } from "@refinedev/core";
 import { useTheme } from "../../hooks/useTheme";
@@ -8,6 +8,7 @@ export const Layout: React.FC<{ children?: React.ReactNode }> = ({ children }) =
   const { push } = useNavigation();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const isActive = (path: string) => {
     return location.pathname === path || location.pathname.startsWith(path + '/');
@@ -42,12 +43,135 @@ export const Layout: React.FC<{ children?: React.ReactNode }> = ({ children }) =
         </svg>
       )
     }
-  ];
-
-  return (
+  ];  return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Side Navigation */}
-      <div className="fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-gray-800 shadow-lg">
+      {/* Mobile Header */}
+      <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <Link to="/" className="flex items-center">
+            <span className="text-xl mr-2">🔍</span>
+            <h1 className="text-lg font-bold text-gray-900 dark:text-white">
+              Manticore
+            </h1>
+          </Link>
+          
+          <div className="flex items-center space-x-2">
+            {/* Theme Toggle Button */}
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+            >
+              {theme === 'light' ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+              )}
+            </button>
+            
+            {/* Mobile Menu Button */}
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="p-2 rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              {isMobileMenuOpen ? (
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              ) : (
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile Menu Overlay */}
+      {isMobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 bg-black bg-opacity-50" onClick={() => setIsMobileMenuOpen(false)}>
+          <div className="fixed inset-y-0 left-0 w-64 bg-white dark:bg-gray-800 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="flex h-16 items-center justify-between border-b border-gray-200 dark:border-gray-700 px-4">
+              <Link to="/" className="flex items-center" onClick={() => setIsMobileMenuOpen(false)}>
+                <span className="text-2xl mr-2">🔍</span>
+                <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+                  Manticore Manager
+                </h1>
+              </Link>
+              
+              <button
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="p-2 rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <nav className="mt-5 px-2">
+              <div className="space-y-1">
+                {/* Main Navigation */}
+                <div className="mb-4">
+                  <h3 className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Navigation
+                  </h3>
+                  <div className="mt-2 space-y-1">
+                    {navigation.map((item) => (
+                      <Link
+                        key={item.name}
+                        to={item.href}
+                        onClick={() => setIsMobileMenuOpen(false)}
+                        className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors ${
+                          isActive(item.href)
+                            ? 'bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-100'
+                            : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {item.icon}
+                        {item.name}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="mt-8 px-3">
+                  <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+                    Quick Actions
+                  </h3>
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => {
+                        push("/tables?create=true");
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors"
+                    >
+                      ➕ Create Table
+                    </button>
+                    <Link
+                      to="/sql"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="block px-3 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors"
+                    >
+                      💾 Execute SQL
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </nav>
+          </div>
+        </div>
+      )}
+
+      {/* Desktop Side Navigation */}
+      <div className="hidden lg:block fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-gray-800 shadow-lg">
         <div className="flex h-16 items-center justify-between border-b border-gray-200 dark:border-gray-700 px-4">
           <Link to="/" className="flex items-center">
             <span className="text-2xl mr-2">🔍</span>
@@ -120,8 +244,8 @@ export const Layout: React.FC<{ children?: React.ReactNode }> = ({ children }) =
               </div>
             </div>
 
-            {/* Keyboard Shortcuts */}
-            <div className="mt-8 px-3">
+            {/* Keyboard Shortcuts - Hidden on smaller screens */}
+            <div className="mt-8 px-3 hidden xl:block">
               <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                 Shortcuts
               </h3>
@@ -152,7 +276,7 @@ export const Layout: React.FC<{ children?: React.ReactNode }> = ({ children }) =
       </div>
 
       {/* Main Content */}
-      <div className="pl-64">
+      <div className="lg:pl-64 pt-16 lg:pt-0">
         <main className="flex-1 min-h-screen">
           {children || <Outlet />}
         </main>

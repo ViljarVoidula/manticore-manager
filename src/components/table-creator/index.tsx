@@ -69,11 +69,10 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ onTableCreated, onCl
 
     createTable(
       {
-        url: "/sql",
+        url: "/cli_json",
         method: "post",
         values: {
-          query: sql,
-          raw_response: true,
+          command: sql,
         },
       },
       {

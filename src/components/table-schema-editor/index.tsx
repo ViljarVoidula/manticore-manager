@@ -1,0 +1,1 @@
+export { TableSchemaEditor } from './TableSchemaEditor';

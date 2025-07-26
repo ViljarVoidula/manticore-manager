@@ -18,6 +18,7 @@ import httpx
 
 from ..config import settings
 from ..models.embeddings import ModelType, ModelInfo
+from .database_init import database_initializer
 
 
 logger = logging.getLogger(__name__)
@@ -440,6 +441,61 @@ class ModelManager:
                 total_memory += self._estimate_model_memory(model_data)
         return total_memory
     
+    def get_model_dimensions(self, model_name: str) -> Optional[int]:
+        """Get dimensions for a model (from loaded model or predefined config)."""
+        # First check if model is loaded
+        if model_name in self._models:
+            return self._models[model_name]["dimensions"]
+        
+        # Check predefined models
+        if model_name in self._available_models:
+            return self._available_models[model_name]["dimensions"]
+        
+        return None
+    
+    async def save_vector_column_metadata(
+        self,
+        table_name: str,
+        column_name: str,
+        model_name: str,
+        knn_type: str = "HNSW",
+        similarity_metric: str = "L2",
+        combined_fields: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Save vector column metadata including model dimensions and combined fields configuration."""
+        dimensions = self.get_model_dimensions(model_name)
+        if dimensions is None:
+            # Try to load the model to get dimensions
+            model_config = self._available_models.get(model_name)
+            if model_config:
+                await self.load_model(model_name, model_config["type"])
+                dimensions = self.get_model_dimensions(model_name)
+        
+        if dimensions is None:
+            raise ValueError(f"Cannot determine dimensions for model: {model_name}")
+        
+        await database_initializer.save_vector_column_settings(
+            table_name=table_name,
+            column_name=column_name,
+            model_name=model_name,
+            dimensions=dimensions,
+            knn_type=knn_type,
+            similarity_metric=similarity_metric,
+            combined_fields=combined_fields
+        )
+    
+    async def get_vector_column_metadata(self, table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
+        """Get vector column metadata from database."""
+        return await database_initializer.get_vector_column_settings(table_name, column_name)
+    
+    async def list_vector_tables(self) -> List[str]:
+        """List all tables with vector columns."""
+        return await database_initializer.list_vector_tables()
+    
+    async def get_table_vector_columns(self, table_name: str) -> List[Dict[str, Any]]:
+        """Get all vector columns for a specific table."""
+        return await database_initializer.get_table_vector_columns(table_name)
+
     async def _ensure_memory_available(self):
         """Ensure memory is available by unloading least recently used models."""
         while len(self._models) >= settings.max_models_in_memory:

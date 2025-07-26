@@ -1,10 +1,16 @@
 import React, { createContext, useEffect, useState } from 'react';
-
-type Theme = 'light' | 'dark';
+import { 
+  Theme, 
+  getInitialTheme, 
+  saveTheme, 
+  applyTheme,
+  createSystemThemeListener 
+} from '../utils/theme';
 
 interface ThemeContextType {
   theme: Theme;
   toggleTheme: () => void;
+  setTheme: (theme: Theme) => void;
 }
 
 export const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -14,38 +20,35 @@ interface ThemeProviderProps {
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
-  const [theme, setTheme] = useState<Theme>('light');
+  const [theme, setThemeState] = useState<Theme>(() => getInitialTheme());
 
   useEffect(() => {
-    // Check if user has a preference stored in localStorage
-    const savedTheme = localStorage.getItem('theme') as Theme;
-    if (savedTheme) {
-      setTheme(savedTheme);
-    } else {
-      // Check system preference
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      setTheme(prefersDark ? 'dark' : 'light');
-    }
-  }, []);
-
-  useEffect(() => {
-    // Apply theme to document
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    
-    // Save to localStorage
-    localStorage.setItem('theme', theme);
+    // Apply theme to document and save to localStorage
+    applyTheme(theme);
+    saveTheme(theme);
   }, [theme]);
 
+  // Optional: Listen for system theme changes and update if user hasn't set a preference
+  useEffect(() => {
+    const cleanup = createSystemThemeListener((systemTheme) => {
+      // Only auto-update if user hasn't explicitly set a preference recently
+      // This could be enhanced with a timestamp check if needed
+      console.log('System theme changed to:', systemTheme);
+    });
+
+    return cleanup;
+  }, []);
+
   const toggleTheme = () => {
-    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+    setThemeState(prev => prev === 'light' ? 'dark' : 'light');
+  };
+
+  const setTheme = (newTheme: Theme) => {
+    setThemeState(newTheme);
   };
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );

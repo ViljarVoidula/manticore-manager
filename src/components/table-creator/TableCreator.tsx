@@ -114,9 +114,9 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
 
     createTable(
       {
-        url: "/sql",
+        url: "/cli_json",
         method: "post",
-        values: { query: createTableSql },
+        values: { command: createTableSql },
       },
       {
         onSuccess: () => {

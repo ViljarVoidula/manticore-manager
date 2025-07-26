@@ -78,6 +78,27 @@ class ManticoreDataProvider implements DataProvider {
     return response.json();
   }
 
+  // New method specifically for CLI JSON commands
+  private async cliJsonCall(command: string): Promise<SqlResponse[]> {
+    const url = `${this.baseUrl}/cli_json`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: command,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => `HTTP ${response.status}: ${response.statusText}`);
+      throw new Error(errorText);
+    }
+
+    const result = await response.json();
+    return Array.isArray(result) ? result : [result];
+  }
+
   async getList<TData extends BaseRecord = BaseRecord>(
     params: GetListParams
   ): Promise<GetListResponse<TData>> {
@@ -276,10 +297,25 @@ class ManticoreDataProvider implements DataProvider {
   custom = async <TData extends BaseRecord = BaseRecord, TQuery = unknown, TPayload = unknown>(
     params: CustomParams<TQuery, TPayload>
   ): Promise<CustomResponse<TData>> => {
-    const { url, method, filters, sorters, payload, query, headers, meta } = params;
+    const { url, method, payload, headers, meta } = params;
+    
     if (url === "/sql" && payload) {
       const sqlPayload = payload as any;
-      const result = await this.executeSql(sqlPayload.query, sqlPayload.raw_response);
+      // Handle both SELECT queries and other SQL commands
+      if (sqlPayload.query && sqlPayload.query.trim().toUpperCase().startsWith('SELECT')) {
+        // Use /sql endpoint for SELECT queries
+        const result = await this.executeSql(sqlPayload.query, sqlPayload.raw_response);
+        return { data: result as unknown as TData };
+      } else if (sqlPayload.query) {
+        // Use /cli_json for other SQL commands
+        const result = await this.executeCliCommand(sqlPayload.query);
+        return { data: result as unknown as TData };
+      }
+    }
+
+    if (url === "/cli_json" && payload) {
+      const cliPayload = payload as any;
+      const result = await this.executeCliCommand(cliPayload.command);
       return { data: result as unknown as TData };
     }
 
@@ -303,60 +339,120 @@ class ManticoreDataProvider implements DataProvider {
   }
 
   // Custom methods for Manticore-specific operations
-  async executeSql(query: string, rawResponse = true): Promise<SqlResponse[]> {
+  async executeSql(query: string, rawResponse = false): Promise<any> {
     try {
-      const response = await this.apiCall(`/sql?raw_response=${rawResponse}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain",
-        },
-        body: query,
-      });
-
-      return Array.isArray(response) ? response : [response];
+      if (rawResponse) {
+        // Use mode=raw for non-SELECT queries or when raw response is explicitly requested
+        const response = await this.apiCall(`/sql?mode=raw`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain",
+          },
+          body: query,
+        });
+        return Array.isArray(response) ? response : [response];
+      } else {
+        // Use regular /sql endpoint for SELECT queries (returns JSON format)
+        const response = await this.apiCall(`/sql`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain",
+          },
+          body: query,
+        });
+        return response;
+      }
     } catch (error) {
       console.error("Error executing SQL:", error);
       throw error;
     }
   }
 
+  async executeCliCommand(command: string): Promise<SqlResponse[]> {
+    try {
+      const response = await this.cliJsonCall(command);
+      return response;
+    } catch (error) {
+      console.error("Error executing CLI command:", error);
+      throw error;
+    }
+  }
+
   async getTables(): Promise<TableInfo[]> {
     try {
-      const response = await this.executeSql("SHOW TABLES");
+      console.log("🔍 Fetching tables list...");
+      const response = await this.executeCliCommand("SHOW TABLES");
+      console.log("📝 SHOW TABLES response:", JSON.stringify(response, null, 2));
+      
       if (response.length > 0 && response[0].data) {
-        return response[0].data.map((row: any) => ({
+        const basicTables = response[0].data.map((row: any) => ({
           name: row.Index || row.Table || Object.values(row)[0],
           engine: row.Type || row.Engine,
         }));
+
+        console.log(`📊 Found ${basicTables.length} tables:`, basicTables.map(t => t.name));
+
+        // Fetch column information for each table
+        const tablesWithColumns = await Promise.all(
+          basicTables.map(async (table) => {
+            try {
+              console.log(`🔧 Fetching columns for table: ${table.name}`);
+              const tableInfo = await this.getTableInfo(table.name);
+              const result = {
+                ...table,
+                columns: tableInfo.columns || [],
+              };
+              console.log(`✅ Table ${table.name} has ${result.columns.length} columns`);
+              return result;
+            } catch (error) {
+              console.warn(`⚠️ Failed to get column info for table ${table.name}:`, error);
+              return {
+                ...table,
+                columns: [],
+              };
+            }
+          })
+        );
+
+        console.log("🎉 Final tables with columns:", tablesWithColumns);
+        return tablesWithColumns;
       }
       return [];
     } catch (error) {
-      console.error("Error getting tables:", error);
+      console.error("❌ Error getting tables:", error);
       return [];
     }
   }
 
   async getTableInfo(tableName: string): Promise<TableInfo> {
     try {
-      const response = await this.executeSql(`DESCRIBE ${tableName}`);
+      console.log(`🔍 Getting table info for: ${tableName}`);
+      const response = await this.executeCliCommand(`DESCRIBE ${tableName}`);
+      console.log(`📝 DESCRIBE ${tableName} response:`, JSON.stringify(response, null, 2));
+      
       const columns: TableColumn[] = [];
       
       if (response.length > 0 && response[0].data) {
+        console.log(`📊 Processing ${response[0].data.length} column records`);
         response[0].data.forEach((row: any) => {
+          console.log(`🔧 Processing column row:`, row);
           columns.push({
             field: row.Field || row.field,
             type: row.Type || row.type,
             properties: row.Properties || row.properties || "",
           });
         });
+      } else {
+        console.warn(`⚠️ No data in DESCRIBE response for ${tableName}`);
       }
 
+      console.log(`✅ Final columns for ${tableName}:`, columns);
       return {
         name: tableName,
         columns,
       };
     } catch (error) {
-      console.error("Error getting table info:", error);
+      console.error(`❌ Error getting table info for ${tableName}:`, error);
       return {
         name: tableName,
         columns: [],

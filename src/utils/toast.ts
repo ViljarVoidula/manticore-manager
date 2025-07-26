@@ -17,6 +17,13 @@ export const toastMessages = {
   tableCreated: (tableName: string) => 
     toast.success(`Table "${tableName}" has been created successfully`),
   
+  // ALTER operation messages
+  alterSuccess: () => 
+    toast.success("Table schema has been updated successfully"),
+  
+  alterError: (message: string) => 
+    toast.error(`Schema update failed: ${message}`),
+  
   // Error messages
   error: (message: string) => 
     toast.error(message),
