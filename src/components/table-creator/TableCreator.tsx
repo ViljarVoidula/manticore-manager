@@ -15,6 +15,35 @@ interface TableCreatorProps {
   onSuccess: () => void;
 }
 
+interface TableSettings {
+  // Search & NLP settings for hybrid search
+  min_infix_len?: number;
+  min_prefix_len?: number;
+  min_word_len?: number;
+  morphology?: string;
+  charset_table?: string;
+  
+  // Performance settings
+  rt_mem_limit?: string;
+  optimize_cutoff?: number;
+  
+  // Access modes for performance
+  access_plain_attrs?: 'mmap' | 'mmap_preread' | 'mlock';
+  access_blob_attrs?: 'mmap' | 'mmap_preread' | 'mlock';
+  access_doclists?: 'file' | 'mmap' | 'mlock';
+  access_hitlists?: 'file' | 'mmap' | 'mlock';
+  access_dict?: 'mmap' | 'mmap_preread' | 'mlock';
+  
+  // Storage settings
+  engine?: 'rowwise' | 'columnar';
+  docstore_compression?: 'lz4' | 'lz4hc' | 'none';
+  docstore_block_size?: string;
+  
+  // Advanced settings
+  preopen?: boolean;
+  attr_update_reserve?: string;
+}
+
 interface ColumnDefinition {
   name: string;
   type: 'text' | 'integer' | 'bigint' | 'float' | 'bool' | 'json' | 'timestamp' | 'float_vector';
@@ -44,6 +73,35 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
     tableName: string;
     columnName: string;
   } | null>(null);
+  
+  // Table settings with optimal defaults for hybrid fulltext + vector search
+  const [tableSettings, setTableSettings] = useState<TableSettings>({
+    // Enable fuzzy search and morphology for better fulltext search
+    min_infix_len: 2,
+    min_prefix_len: 3,
+    min_word_len: 2,
+    morphology: 'stem_en',
+    
+    // Performance settings optimized for mixed workloads
+    rt_mem_limit: '256M',
+    optimize_cutoff: 5,
+    
+    // Balanced access modes for hybrid search
+    access_plain_attrs: 'mmap_preread',
+    access_blob_attrs: 'mmap_preread', 
+    access_doclists: 'mmap',
+    access_hitlists: 'mmap',
+    access_dict: 'mmap_preread',
+    
+    // Row-wise storage for better search performance
+    engine: 'rowwise',
+    docstore_compression: 'lz4hc',
+    docstore_block_size: '32k',
+    
+    // Advanced settings
+    preopen: true,
+    attr_update_reserve: '256k'
+  });
 
   const { mutate: createTable } = useCustomMutation();
   const dataProvider = useDataProvider();
@@ -208,8 +266,60 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
       return def;
     }).join(',\n  ');
 
-    // Manticore Search requires a table type (rt = real-time)
-    const createTableSql = `CREATE TABLE ${tableName} (\n  ${columnDefinitions}\n) type='rt'`;
+    // Build table settings string
+    const settingsArray: string[] = ["type='rt'"];
+    
+    // Add enabled table settings
+    if (tableSettings.min_infix_len !== undefined) {
+      settingsArray.push(`min_infix_len='${tableSettings.min_infix_len}'`);
+    }
+    if (tableSettings.min_prefix_len !== undefined) {
+      settingsArray.push(`min_prefix_len='${tableSettings.min_prefix_len}'`);
+    }
+    if (tableSettings.min_word_len !== undefined) {
+      settingsArray.push(`min_word_len='${tableSettings.min_word_len}'`);
+    }
+    if (tableSettings.morphology) {
+      settingsArray.push(`morphology='${tableSettings.morphology}'`);
+    }
+    if (tableSettings.rt_mem_limit) {
+      settingsArray.push(`rt_mem_limit='${tableSettings.rt_mem_limit}'`);
+    }
+    if (tableSettings.optimize_cutoff !== undefined) {
+      settingsArray.push(`optimize_cutoff='${tableSettings.optimize_cutoff}'`);
+    }
+    if (tableSettings.access_plain_attrs) {
+      settingsArray.push(`access_plain_attrs='${tableSettings.access_plain_attrs}'`);
+    }
+    if (tableSettings.access_blob_attrs) {
+      settingsArray.push(`access_blob_attrs='${tableSettings.access_blob_attrs}'`);
+    }
+    if (tableSettings.access_doclists) {
+      settingsArray.push(`access_doclists='${tableSettings.access_doclists}'`);
+    }
+    if (tableSettings.access_hitlists) {
+      settingsArray.push(`access_hitlists='${tableSettings.access_hitlists}'`);
+    }
+    if (tableSettings.access_dict) {
+      settingsArray.push(`access_dict='${tableSettings.access_dict}'`);
+    }
+    if (tableSettings.engine) {
+      settingsArray.push(`engine='${tableSettings.engine}'`);
+    }
+    if (tableSettings.docstore_compression) {
+      settingsArray.push(`docstore_compression='${tableSettings.docstore_compression}'`);
+    }
+    if (tableSettings.docstore_block_size) {
+      settingsArray.push(`docstore_block_size='${tableSettings.docstore_block_size}'`);
+    }
+    if (tableSettings.preopen !== undefined) {
+      settingsArray.push(`preopen='${tableSettings.preopen ? 1 : 0}'`);
+    }
+    if (tableSettings.attr_update_reserve) {
+      settingsArray.push(`attr_update_reserve='${tableSettings.attr_update_reserve}'`);
+    }
+
+    const createTableSql = `CREATE TABLE ${tableName} (\n  ${columnDefinitions}\n) ${settingsArray.join(' ')}`;
 
     createTable(
       {
@@ -256,6 +366,25 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
       { name: 'id', type: 'bigint', indexed: true, stored: true },
       { name: 'data', type: 'json', indexed: false, stored: true }
     ]);
+    // Reset table settings to defaults
+    setTableSettings({
+      min_infix_len: 2,
+      min_prefix_len: 3,
+      min_word_len: 2,
+      morphology: 'stem_en',
+      rt_mem_limit: '256M',
+      optimize_cutoff: 5,
+      access_plain_attrs: 'mmap_preread',
+      access_blob_attrs: 'mmap_preread',
+      access_doclists: 'mmap',
+      access_hitlists: 'mmap',
+      access_dict: 'mmap_preread',
+      engine: 'rowwise',
+      docstore_compression: 'lz4hc',
+      docstore_block_size: '32k',
+      preopen: true,
+      attr_update_reserve: '256k'
+    });
     setError(null);
     setShowVectorConfig(false);
     setVectorColumnToConfig(null);
@@ -537,6 +666,185 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
               </div>
             </div>
 
+            {/* Table Settings */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Table Settings
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Reset to minimal settings for simple tables
+                    setTableSettings({
+                      min_infix_len: 2,
+                      morphology: 'stem_en',
+                      engine: 'rowwise'
+                    });
+                  }}
+                  className="px-3 py-1 bg-gray-500 text-white text-sm rounded-md hover:bg-gray-600"
+                >
+                  Reset to Minimal
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-4 border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md">
+                {/* Search & NLP Settings */}
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">🔍 Search & Language Processing</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Min Infix Length (fuzzy search)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="10"
+                        value={tableSettings.min_infix_len || ''}
+                        onChange={(e) => setTableSettings(prev => ({
+                          ...prev,
+                          min_infix_len: e.target.value ? parseInt(e.target.value) : undefined
+                        }))}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-600 text-gray-900 dark:text-white rounded-md"
+                        placeholder="2 (recommended)"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable fuzzy search (2+ recommended)</p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Morphology
+                      </label>
+                      <select
+                        value={tableSettings.morphology || ''}
+                        onChange={(e) => setTableSettings(prev => ({
+                          ...prev,
+                          morphology: e.target.value || undefined
+                        }))}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-600 text-gray-900 dark:text-white rounded-md"
+                      >
+                        <option value="">None</option>
+                        <option value="stem_en">English Stemming</option>
+                        <option value="stem_ru">Russian Stemming</option>
+                        <option value="stem_de">German Stemming</option>
+                        <option value="stem_fr">French Stemming</option>
+                        <option value="lemmatize_en">English Lemmatization</option>
+                        <option value="lemmatize_ru">Russian Lemmatization</option>
+                      </select>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Word normalization for better matching</p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Min Word Length
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={tableSettings.min_word_len || ''}
+                        onChange={(e) => setTableSettings(prev => ({
+                          ...prev,
+                          min_word_len: e.target.value ? parseInt(e.target.value) : undefined
+                        }))}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-600 text-gray-900 dark:text-white rounded-md"
+                        placeholder="2"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Minimum length of indexed words</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Performance Settings */}
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">⚡ Performance & Storage</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        RAM Chunk Limit
+                      </label>
+                      <select
+                        value={tableSettings.rt_mem_limit || ''}
+                        onChange={(e) => setTableSettings(prev => ({
+                          ...prev,
+                          rt_mem_limit: e.target.value || undefined
+                        }))}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-600 text-gray-900 dark:text-white rounded-md"
+                      >
+                        <option value="128M">128M (Default)</option>
+                        <option value="256M">256M (Recommended)</option>
+                        <option value="512M">512M</option>
+                        <option value="1G">1GB</option>
+                        <option value="2G">2GB</option>
+                      </select>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Memory limit for RAM chunk</p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Storage Engine
+                      </label>
+                      <select
+                        value={tableSettings.engine || ''}
+                        onChange={(e) => setTableSettings(prev => ({
+                          ...prev,
+                          engine: e.target.value as 'rowwise' | 'columnar' || undefined
+                        }))}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-600 text-gray-900 dark:text-white rounded-md"
+                      >
+                        <option value="rowwise">Row-wise (Better for search)</option>
+                        <option value="columnar">Columnar (Better for analytics)</option>
+                      </select>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Storage format optimization</p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Document Compression
+                      </label>
+                      <select
+                        value={tableSettings.docstore_compression || ''}
+                        onChange={(e) => setTableSettings(prev => ({
+                          ...prev,
+                          docstore_compression: e.target.value as 'lz4' | 'lz4hc' | 'none' || undefined
+                        }))}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-600 text-gray-900 dark:text-white rounded-md"
+                      >
+                        <option value="lz4">LZ4 (Fast)</option>
+                        <option value="lz4hc">LZ4HC (Better compression)</option>
+                        <option value="none">None</option>
+                      </select>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Compression for stored fields</p>
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center text-xs text-gray-700 dark:text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={tableSettings.preopen || false}
+                          onChange={(e) => setTableSettings(prev => ({
+                            ...prev,
+                            preopen: e.target.checked
+                          }))}
+                          className="mr-2"
+                        />
+                        Pre-open table files (better performance, more file descriptors)
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-md">
+                <h5 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-1">💡 Optimal Settings for Hybrid Search</h5>
+                <p className="text-xs text-blue-700 dark:text-blue-300">
+                  These settings are optimized for applications that use both fulltext search and vector similarity. 
+                  Key features: fuzzy search enabled, English stemming, balanced memory usage, row-wise storage for search performance.
+                </p>
+              </div>
+            </div>
+
             {/* Vector Search Info */}
             {columns.some(col => col.type === 'float_vector') && (
               <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-md p-4">
@@ -572,11 +880,11 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
                 SQL Preview
               </label>
               <pre className="bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 p-3 rounded-md text-sm font-mono overflow-x-auto">
-                {tableName ? (
-                  `CREATE TABLE ${tableName} (\n${columns.map(col => {
+                {tableName ? (() => {
+                  // Build column definitions
+                  const columnDefs = columns.map(col => {
                     let def = `  ${col.name} ${col.type.toUpperCase()}`;
                     
-                    // Handle vector fields with KNN parameters
                     if (col.type === 'float_vector') {
                       def += ` knn_type='${col.knnType || 'hnsw'}'`;
                       def += ` knn_dims='${col.vectorDimensions || 128}'`;
@@ -590,16 +898,30 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
                         if (col.hnswM) def += ` hnsw_m='${col.hnswM}'`;
                         if (col.hnswEfConstruction) def += ` hnsw_ef_construction='${col.hnswEfConstruction}'`;
                       }
-                    }
-                    // For Manticore Search, handle attributes correctly
-                    else if (col.type === 'text' && !col.indexed) {
+                    } else if (col.type === 'text' && !col.indexed) {
                       def += ' attribute';
                     }
                     
                     return def;
-                  }).join(',\n')}\n) type='rt'`
-                ) : (
-                  "CREATE TABLE table_name (\n  ...\n) type='rt'"
+                  }).join(',\n');
+                  
+                  // Build settings array
+                  const settingsArray = ["type='rt'"];
+                  if (tableSettings.min_infix_len !== undefined) settingsArray.push(`min_infix_len='${tableSettings.min_infix_len}'`);
+                  if (tableSettings.min_prefix_len !== undefined) settingsArray.push(`min_prefix_len='${tableSettings.min_prefix_len}'`);
+                  if (tableSettings.min_word_len !== undefined) settingsArray.push(`min_word_len='${tableSettings.min_word_len}'`);
+                  if (tableSettings.morphology) settingsArray.push(`morphology='${tableSettings.morphology}'`);
+                  if (tableSettings.rt_mem_limit) settingsArray.push(`rt_mem_limit='${tableSettings.rt_mem_limit}'`);
+                  if (tableSettings.optimize_cutoff !== undefined) settingsArray.push(`optimize_cutoff='${tableSettings.optimize_cutoff}'`);
+                  if (tableSettings.engine) settingsArray.push(`engine='${tableSettings.engine}'`);
+                  if (tableSettings.docstore_compression) settingsArray.push(`docstore_compression='${tableSettings.docstore_compression}'`);
+                  if (tableSettings.docstore_block_size) settingsArray.push(`docstore_block_size='${tableSettings.docstore_block_size}'`);
+                  if (tableSettings.preopen !== undefined) settingsArray.push(`preopen='${tableSettings.preopen ? 1 : 0}'`);
+                  if (tableSettings.attr_update_reserve) settingsArray.push(`attr_update_reserve='${tableSettings.attr_update_reserve}'`);
+                  
+                  return `CREATE TABLE ${tableName} (\n${columnDefs}\n) ${settingsArray.join(' ')}`;
+                })() : (
+                  "CREATE TABLE table_name (\n  ...\n) type='rt' [settings...]"
                 )}
               </pre>
             </div>

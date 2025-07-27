@@ -1,15 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useDataProvider } from '@refinedev/core';
-
-interface VectorColumn {
-  tbl_name: string;
-  col_name: string;
-  mdl_name: string;
-  knn_type: string;
-  similarity_metric: string;
-  dimensions: number;
-  combined_fields?: any;
-}
+import { VectorColumnInfo, getCachedVectorColumnSettings } from '../../utils/vectorColumnCache';
 
 interface TableCellRendererProps {
   value: unknown;
@@ -18,61 +8,55 @@ interface TableCellRendererProps {
   tableName: string;
 }
 
-export const TableCellRenderer: React.FC<TableCellRendererProps> = ({
+export const TableCellRenderer: React.FC<TableCellRendererProps> = React.memo(({
   value,
   columnField,
   columnType,
   tableName
 }) => {
-  const [vectorColumns, setVectorColumns] = useState<VectorColumn[]>([]);
+  const [vectorColumns, setVectorColumns] = useState<VectorColumnInfo[]>([]);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
-  const dataProvider = useDataProvider();
 
-  // Fetch vector column mappings on mount
+  // Get vector column mappings from shared cache (no individual API calls!)
   useEffect(() => {
-    const fetchVectorColumns = async () => {
-      try {
-        const dp = dataProvider();
-        if (dp && dp.custom) {
-          const response = await dp.custom({
-            url: "/search",
-            method: "post",
-            payload: {
-              table: "manager_vector_column_settings",
-              query: {
-                match: { tbl_name: tableName }
-              },
-              limit: 100
-            }
-          });
-
-          if (response.data?.hits?.hits?.length > 0) {
-            const columns = response.data.hits.hits.map((hit: any) => ({
-              tbl_name: hit._source.tbl_name,
-              col_name: hit._source.col_name,
-              mdl_name: hit._source.mdl_name,
-              knn_type: hit._source.knn_type,
-              similarity_metric: hit._source.similarity_metric,
-              dimensions: hit._source.dimensions,
-              combined_fields: hit._source.combined_fields ? 
-                (typeof hit._source.combined_fields === 'string' ? 
-                  JSON.parse(hit._source.combined_fields) : 
-                  hit._source.combined_fields) : undefined
-            }));
-            setVectorColumns(columns);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to fetch vector columns:', error);
+    const getVectorColumns = () => {
+      // Try to get from cache first (no API call)
+      const cachedColumns = getCachedVectorColumnSettings(tableName);
+      if (cachedColumns) {
+        console.log(`TableCellRenderer: Using cached vector settings for ${tableName}`);
+        setVectorColumns(cachedColumns);
+        return true; // Found cache
+      } else {
+        // If not in cache, we'll just not show vector-specific features
+        // The SearchFilter component will populate the cache when it loads
+        setVectorColumns([]);
+        return false; // No cache found
       }
     };
 
-    fetchVectorColumns();
-  }, [tableName, dataProvider]);
+    getVectorColumns();
+    
+    // Set up a small interval to check for cache updates from SearchFilter
+    // But only log the "no cache" message once to avoid spam
+    let hasLoggedNoCache = false;
+    const intervalId = setInterval(() => {
+      const foundCache = getVectorColumns();
+      if (!foundCache && !hasLoggedNoCache) {
+        console.log(`TableCellRenderer: No cached vector settings for ${tableName}, using basic rendering`);
+        hasLoggedNoCache = true;
+      }
+      // Stop polling once we find cached data
+      if (foundCache) {
+        clearInterval(intervalId);
+      }
+    }, 2000); // Check every 2 seconds instead of 1 second
+    
+    return () => clearInterval(intervalId);
+  }, [tableName]);
 
   // Check if current column is a vector column
   const isVectorColumn = columnType === 'float_vector' || 
-    vectorColumns.some(vc => vc.col_name === columnField);
+    vectorColumns.some(vc => vc.column_name === columnField);
 
   // Helper function to detect if a string is an image URL
   const isImageUrl = (str: string): boolean => {
@@ -126,7 +110,7 @@ export const TableCellRenderer: React.FC<TableCellRendererProps> = ({
     }
     
     // Then check if it's configured as an image field in vector mappings
-    const vectorColumn = vectorColumns.find(vc => vc.col_name === columnField);
+    const vectorColumn = vectorColumns.find(vc => vc.column_name === columnField);
     if (vectorColumn?.combined_fields?.source_fields?.includes(columnField)) {
       return isImageUrl(stringValue);
     }
@@ -257,4 +241,12 @@ export const TableCellRenderer: React.FC<TableCellRendererProps> = ({
   }
 
   return <span className="text-sm">{displayValue}</span>;
-};
+}, (prevProps, nextProps) => {
+  // Prevent re-renders if props haven't changed
+  return (
+    prevProps.value === nextProps.value &&
+    prevProps.columnField === nextProps.columnField &&
+    prevProps.columnType === nextProps.columnType &&
+    prevProps.tableName === nextProps.tableName
+  );
+});

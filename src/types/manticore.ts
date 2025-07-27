@@ -1,29 +1,40 @@
 // Manticore Search API types based on the OpenAPI specification
 
 export interface ManticoreSearchRequest {
-  table: string;
+  index: string;
   query?: QueryFilter;
   limit?: number;
   offset?: number;
-  sort?: any;
+  sort?: Record<string, 'asc' | 'desc' | { order: 'asc' | 'desc' }>[];
   highlight?: Highlight;
   aggs?: Record<string, Aggregation>;
   expressions?: Record<string, string>;
   max_matches?: number;
-  options?: Record<string, any>;
+  options?: Record<string, string | number | boolean>;
   profile?: boolean;
-  _source?: any;
+  _source?: boolean | string[];
   track_scores?: boolean;
+  knn?: KnnQuery;
+  size?: number;
+  from?: number;
+}
+
+export interface KnnQuery {
+    field: string;
+    query_vector: number[];
+    k: number;
+    ef?: number;
+    filter?: QueryFilter;
 }
 
 export interface QueryFilter {
-  query_string?: string;
-  match?: Record<string, any>;
-  match_phrase?: Record<string, any>;
-  match_all?: Record<string, any>;
+  query_string?: string | { query: string };
+  match?: Record<string, string | { query: string; operator: string; }>;
+  match_phrase?: Record<string, string>;
+  match_all?: Record<string, unknown>;
   bool?: BoolFilter;
-  equals?: Record<string, any>;
-  in?: Record<string, any>;
+  equals?: Record<string, string | number | boolean>;
+  in?: Record<string, (string | number)[]>;
   range?: Record<string, Range>;
   geo_distance?: GeoDistance;
 }
@@ -35,10 +46,10 @@ export interface BoolFilter {
 }
 
 export interface Range {
-  lt?: any;
-  lte?: any;
-  gt?: any;
-  gte?: any;
+  lt?: string | number;
+  lte?: string | number;
+  gt?: string | number;
+  gte?: string | number;
 }
 
 export interface GeoDistance {
@@ -52,7 +63,7 @@ export interface GeoDistance {
 }
 
 export interface Highlight {
-  fields?: string[] | Record<string, any>;
+  fields?: string[] | Record<string, Record<string, unknown>>;
   pre_tags?: string;
   post_tags?: string;
   fragment_size?: number;
@@ -63,6 +74,7 @@ export interface Aggregation {
   terms?: {
     field: string;
     size?: number;
+    order?: Record<string, 'asc' | 'desc'>;
   };
   histogram?: {
     field: string;
@@ -81,46 +93,50 @@ export interface ManticoreSearchResponse {
     max_score?: number;
     hits: SearchHit[];
   };
-  aggregations?: Record<string, any>;
-  profile?: Record<string, any>;
-  warning?: Record<string, any>;
+  aggregations?: Record<string, {
+    buckets: { key: string | number; doc_count: number }[];
+    doc_count_error_upper_bound?: number;
+    sum_other_doc_count?: number;
+  }>;
+  profile?: Record<string, unknown>;
+  warning?: Record<string, string>;
 }
 
 export interface SearchHit {
   _id: string | number;
   _score?: number;
-  _source: Record<string, any>;
+  _source: Record<string, unknown>;
   _knn_dist?: number;
   highlight?: Record<string, string[]>;
   table?: string;
   _type?: string;
-  fields?: Record<string, any>;
+  fields?: Record<string, unknown>;
 }
 
 export interface InsertDocumentRequest {
-  table: string;
+  index: string;
   cluster?: string;
   id?: number;
-  doc: Record<string, any>;
+  doc: Record<string, unknown>;
 }
 
 export interface UpdateDocumentRequest {
-  table: string;
+  index: string;
   cluster?: string;
   id?: number;
-  doc: Record<string, any>;
+  doc: Record<string, unknown>;
   query?: QueryFilter;
 }
 
 export interface DeleteDocumentRequest {
-  table: string;
+  index: string;
   cluster?: string;
   id?: number;
   query?: QueryFilter;
 }
 
 export interface ManticoreSuccessResponse {
-  table: string;
+  index: string;
   id?: number;
   created?: boolean;
   result: string;
@@ -134,7 +150,7 @@ export interface ManticoreErrorResponse {
   error: {
     type?: string;
     reason?: string;
-    table?: string;
+    index?: string;
   } | string;
   status: number;
 }
@@ -148,13 +164,17 @@ export interface SqlResponse {
       type: string;
     };
   }>;
-  data?: Array<Record<string, any>>;
+  data?: Array<Record<string, unknown>>;
 }
 
 export interface TableInfo {
   name: string;
   engine?: string;
   columns?: TableColumn[];
+  settings?: {
+    min_infix_len?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface TableColumn {

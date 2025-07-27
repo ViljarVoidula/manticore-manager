@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useCustomMutation, useDelete, useList, BaseRecord } from "@refinedev/core";
 import { useParams, useNavigate, useSearchParams } from "react-router";
 import { TableInfo } from "../../types/manticore";
@@ -6,6 +6,8 @@ import { TableCreator } from "../../components/table-creator/TableCreator";
 import { TableSchemaEditor } from "../../components/table-schema-editor";
 import { DocumentForm } from "../../components/forms";
 import { TableCellRenderer } from "../../components/table-cell-renderer";
+import { DataImportModal } from "../../components/data-import-modal";
+import { SearchFilter, SearchParams } from "../../components/search-filter";
 import { toastMessages } from "../../utils/toast";
 
 interface Document extends BaseRecord {
@@ -18,11 +20,29 @@ export const TablesPage: React.FC = () => {
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selectedTable, setSelectedTable] = useState<TableInfo | null>(null);
+  
+  // Memoize selectedTable to prevent unnecessary SearchFilter re-renders
+  const stableSelectedTable = useMemo(() => {
+    if (!selectedTable) return null;
+    // Create a stable reference by only including essential properties
+    return {
+      name: selectedTable.name,
+      columns: selectedTable.columns || []
+    } as TableInfo;
+  }, [selectedTable]);
   const [showCreateDocumentForm, setShowCreateDocumentForm] = useState(false);
   const [editingDocument, setEditingDocument] = useState<Document | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchParameters, setSearchParameters] = useState<SearchParams | null>(null);
   const [showSchemaEditor, setShowSchemaEditor] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  
+  // Loading states
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [tableInfoLoading, setTableInfoLoading] = useState(false);
+  const [searchFacets, setSearchFacets] = useState<Record<string, any> | null>(null);
+  const [appliedFacetFilters, setAppliedFacetFilters] = useState<Record<string, string[]>>({});
+  const [facetsExpanded, setFacetsExpanded] = useState(true);
   
   const { tableId } = useParams();
   const navigate = useNavigate();
@@ -35,26 +55,40 @@ export const TablesPage: React.FC = () => {
   const { mutate: deleteTableVectorSettings } = useCustomMutation();
   const { mutate: deleteDocument } = useDelete();
 
-  // Fetch documents for selected table
-  const { data: documentsData, refetch: refetchDocuments } = useList({
+  // Memoize the useList parameters to prevent unnecessary re-renders
+  const listParams = useMemo(() => ({
     resource: tableId || "",
     pagination: {
       current: currentPage,
       pageSize: 10,
     },
-    filters: searchQuery ? [
+    filters: searchParameters?.type === 'basic' && searchParameters.query ? [
       {
         field: "query_string",
         operator: "contains",
-        value: searchQuery,
-      }
+        value: searchParameters.query,
+      } as any
     ] : undefined,
+    meta: searchParameters ? { searchParams: searchParameters } : undefined,
     queryOptions: {
       enabled: !!tableId,
     },
-  });
+  }), [tableId, currentPage, searchParameters]);
+
+  // Fetch documents for selected table
+  const { data: documentsData, refetch: refetchDocuments, isLoading: documentsListLoading } = useList(listParams);
+  
+  // Extract facets from the documents data when it changes
+  useEffect(() => {
+    if (documentsData && (documentsData as any).facets) {
+      setSearchFacets((documentsData as any).facets);
+    } else {
+      setSearchFacets(null);
+    }
+  }, [documentsData]);
 
   const loadTables = useCallback(() => {
+    setTablesLoading(true);
     fetchTables(
       {
         url: "/tables",
@@ -64,12 +98,17 @@ export const TablesPage: React.FC = () => {
       {
         onSuccess: (data) => {
           setTables((data.data as unknown[]) as TableInfo[]);
+          setTablesLoading(false);
+        },
+        onError: () => {
+          setTablesLoading(false);
         },
       }
     );
-  }, [fetchTables]);
+  }, [fetchTables]); // Keep fetchTables but this should be stable from useCustomMutation
 
   const loadTableInfo = useCallback((tableName: string) => {
+    setTableInfoLoading(true);
     fetchTableInfo(
       {
         url: "/table-info",
@@ -79,6 +118,7 @@ export const TablesPage: React.FC = () => {
       {
         onSuccess: (data) => {
           setSelectedTable(data.data as TableInfo);
+          setTableInfoLoading(false);
         },
         onError: (error) => {
           console.error('Failed to fetch table info:', error);
@@ -89,10 +129,11 @@ export const TablesPage: React.FC = () => {
               { field: 'data', type: 'json', properties: '' }
             ]
           });
+          setTableInfoLoading(false);
         }
       }
     );
-  }, [fetchTableInfo]);
+  }, [fetchTableInfo]); // Keep fetchTableInfo but this should be stable from useCustomMutation
 
   // Load tables on mount
   useEffect(() => {
@@ -208,11 +249,91 @@ export const TablesPage: React.FC = () => {
     setShowCreateDocumentForm(true);
   };
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSearch = useCallback((newSearchParams: SearchParams) => {
+    setSearchParameters(newSearchParams);
     setCurrentPage(1);
-    refetchDocuments();
-  };
+  }, []);
+
+  const handleResetSearch = useCallback(() => {
+    setSearchParameters(null);
+    setAppliedFacetFilters({});
+    setCurrentPage(1);
+  }, []);
+
+  // Handle facet filter changes
+  const handleFacetFilterChange = useCallback((fieldName: string, value: string, checked: boolean) => {
+    setAppliedFacetFilters(prev => {
+      const updated = { ...prev };
+      if (!updated[fieldName]) {
+        updated[fieldName] = [];
+      }
+      
+      if (checked) {
+        // Add the value if it's not already present
+        if (!updated[fieldName].includes(value)) {
+          updated[fieldName] = [...updated[fieldName], value];
+        }
+      } else {
+        // Remove the value
+        updated[fieldName] = updated[fieldName].filter(v => v !== value);
+        // Remove empty arrays
+        if (updated[fieldName].length === 0) {
+          delete updated[fieldName];
+        }
+      }
+      
+      return updated;
+    });
+  }, []);
+
+  // Apply facet filters to search
+  const applyFacetFilters = useCallback(() => {
+    if (Object.keys(appliedFacetFilters).length === 0) {
+      return; // No filters to apply
+    }
+
+    // When facet filters are applied, we need to update the search to include them
+    // Start with the base search parameters or create a basic search
+    let baseSearchParams: SearchParams;
+    
+    if (searchParameters) {
+      baseSearchParams = { ...searchParameters };
+    } else {
+      // No existing search - create a match_all query with facet filters
+      baseSearchParams = {
+        type: 'basic',
+        query: '*', // Match all documents
+        facets: (searchParameters as any)?.facets || [], // Preserve existing facets config
+        appliedFacetFilters: appliedFacetFilters
+      };
+    }
+
+    // Add the applied facet filters to the search params
+    baseSearchParams.appliedFacetFilters = appliedFacetFilters;
+
+    setSearchParameters(baseSearchParams);
+    setCurrentPage(1);
+  }, [appliedFacetFilters, searchParameters]);
+
+  // Auto-apply filters when facet selections change
+  useEffect(() => {
+    if (Object.keys(appliedFacetFilters).length > 0) {
+      applyFacetFilters();
+    } else if (Object.keys(appliedFacetFilters).length === 0 && searchParameters?.type === 'advanced') {
+      // If no facet filters and we have advanced search with only facet filters, reset to basic
+      const hasNonFacetFilters = searchParameters.filters?.some(f => 
+        f.field === 'query_string' || !Object.keys({}).includes(f.field)
+      ) || false;
+      
+      if (!hasNonFacetFilters) {
+        setSearchParameters(null);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedFacetFilters]);
+
+  // Remove the problematic useEffect that causes infinite loops
+  // The useList hook will automatically refetch when its memoized parameters change
 
   const handleTableUpdated = (updatedTable: TableInfo) => {
     setSelectedTable(updatedTable);
@@ -262,7 +383,12 @@ export const TablesPage: React.FC = () => {
         <div className="hidden lg:block lg:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
           <div className="p-4">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Available Tables</h2>
-            {tables.length === 0 ? (
+            {tablesLoading ? (
+              <div className="text-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                <p className="text-gray-500 dark:text-gray-400">Loading tables...</p>
+              </div>
+            ) : tables.length === 0 ? (
               <div className="text-center py-8">
                 <p className="text-gray-500 dark:text-gray-400 mb-4">No tables found</p>
                 <button
@@ -416,7 +542,12 @@ export const TablesPage: React.FC = () => {
             <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 lg:px-6 py-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                  <h2 className="text-base lg:text-lg font-semibold text-gray-900 dark:text-white">Table Data</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base lg:text-lg font-semibold text-gray-900 dark:text-white">Table Data</h2>
+                    {tableInfoLoading && (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    )}
+                  </div>
                   {documentsData && (
                     <p className="text-xs lg:text-sm text-gray-500 dark:text-gray-400">
                       {documentsData.total} documents total
@@ -430,32 +561,178 @@ export const TablesPage: React.FC = () => {
                   >
                     Add Document
                   </button>
+                  <button
+                    onClick={() => setShowImportModal(true)}
+                    className="px-3 lg:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
+                  >
+                    Import Data
+                  </button>
                 </div>
               </div>
 
-              {/* Search */}
-              <form onSubmit={handleSearch} className="mt-4">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Search documents..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="flex-1 p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm lg:text-base"
+              {/* Advanced Search */}
+              {stableSelectedTable && !tableInfoLoading && (
+                <div className="mt-4">
+                  <SearchFilter
+                    table={stableSelectedTable}
+                    onSearch={handleSearch}
+                    onReset={handleResetSearch}
                   />
-                  <button
-                    type="submit"
-                    className="px-3 lg:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
-                  >
-                    Search
-                  </button>
                 </div>
-              </form>
+              )}
+              
+              {/* Interactive Facets Display */}
+              {searchFacets && Object.keys(searchFacets).length > 0 && (
+                <div className="mt-4 border border-blue-200 dark:border-blue-700 rounded-lg bg-blue-50 dark:bg-blue-900/20">
+                  <div className="p-4 pb-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <button
+                        onClick={() => setFacetsExpanded(!facetsExpanded)}
+                        className="flex items-center gap-2 text-sm font-semibold text-blue-800 dark:text-blue-200 hover:text-blue-900 dark:hover:text-blue-100"
+                      >
+                        <span className={`transform transition-transform ${facetsExpanded ? 'rotate-90' : ''}`}>
+                          ▶
+                        </span>
+                        📊 Search Facets & Filters
+                        <span className="text-xs bg-blue-200 dark:bg-blue-800 px-2 py-1 rounded-full">
+                          {Object.keys(searchFacets).length}
+                        </span>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        {Object.keys(appliedFacetFilters).length > 0 && (
+                          <span className="text-xs text-blue-700 dark:text-blue-300 bg-blue-200 dark:bg-blue-800 px-2 py-1 rounded-full">
+                            {Object.values(appliedFacetFilters).flat().length} active
+                          </span>
+                        )}
+                        {Object.keys(appliedFacetFilters).length > 0 && (
+                          <button
+                            onClick={() => {
+                              setAppliedFacetFilters({});
+                              handleResetSearch();
+                            }}
+                            className="text-xs px-2 py-1 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800"
+                          >
+                            Clear All
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Applied Filters Summary - Always visible */}
+                  {Object.keys(appliedFacetFilters).length > 0 && (
+                    <div className="px-4 pb-3">
+                      <div className="bg-white dark:bg-gray-800 rounded border border-blue-100 dark:border-blue-800 p-3">
+                        <h4 className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          🏷️ Active Filters ({Object.values(appliedFacetFilters).flat().length})
+                        </h4>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(appliedFacetFilters).map(([fieldName, values]) =>
+                            values.map(value => (
+                              <span
+                                key={`${fieldName}-${value}`}
+                                className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
+                              >
+                                {fieldName}: {value}
+                                <button
+                                  onClick={() => handleFacetFilterChange(fieldName, value, false)}
+                                  className="ml-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Collapsible Facets Content */}
+                  {facetsExpanded && (
+                    <div className="p-4 pt-0">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {Object.entries(searchFacets).map(([facetName, facetData]) => {
+                          const fieldName = facetName.replace('facet_', '').replace(/_\d+$/, '');
+                          return (
+                            <div key={facetName} className="bg-white dark:bg-gray-800 p-3 rounded-md border border-blue-100 dark:border-blue-800">
+                              <h4 className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2 uppercase">
+                                {fieldName}
+                              </h4>
+                              <div className="space-y-1 max-h-48 overflow-y-auto">
+                                {facetData?.buckets ? (
+                                  // Terms aggregation with checkboxes
+                                  facetData.buckets.slice(0, 20).map((bucket: any, index: number) => {
+                                    const bucketValue = String(bucket.key || bucket._key || 'Unknown');
+                                    const isChecked = appliedFacetFilters[fieldName]?.includes(bucketValue) || false;
+                                    
+                                    return (
+                                      <label
+                                        key={index}
+                                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 p-1 rounded"
+                                      >
+                                        <div className="flex items-center min-w-0 flex-1">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={(e) => handleFacetFilterChange(fieldName, bucketValue, e.target.checked)}
+                                            className="mr-2 rounded text-blue-600 focus:ring-blue-500"
+                                          />
+                                          <span className="text-gray-700 dark:text-gray-300 truncate">
+                                            {bucketValue}
+                                          </span>
+                                        </div>
+                                        <span className={`ml-2 font-medium px-2 py-1 rounded text-xs ${
+                                          isChecked 
+                                            ? 'bg-blue-200 text-blue-800 dark:bg-blue-800 dark:text-blue-200'
+                                            : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                                        }`}>
+                                          {bucket.doc_count || bucket.count || 0}
+                                        </span>
+                                      </label>
+                                    );
+                                  })
+                                ) : (
+                                  // Other aggregation types (non-interactive)
+                                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    <pre className="whitespace-pre-wrap text-xs">
+                                      {JSON.stringify(facetData, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      
+                      <div className="mt-3 text-xs text-blue-700 dark:text-blue-300">
+                        💡 Check boxes to filter results. Selected filters are applied automatically.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Table loading placeholder */}
+              {tableInfoLoading && (
+                <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-md">
+                  <div className="animate-pulse">
+                    <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-1/4 mb-2"></div>
+                    <div className="h-10 bg-gray-300 dark:bg-gray-600 rounded"></div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Documents Table */}
             <div className="flex-1 flex overflow-auto p-4 lg:p-6 bg-white dark:bg-gray-800">
-              {documentsData && documentsData.data.length > 0 ? (
+              {tableInfoLoading || documentsListLoading ? (
+                <div className="text-center py-12">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                  <p className="text-gray-500 dark:text-gray-400">Loading table data...</p>
+                </div>
+              ) : documentsData && documentsData.data.length > 0 ? (
                 <div className="flex w-full h-full">
                   {/* Table and Pagination */}
                   <div className="flex-1 flex flex-col">
@@ -485,6 +762,19 @@ export const TablesPage: React.FC = () => {
                               </div>
                             </div>
                           ))}
+                          {/* Add score in mobile view */}
+                          {(document as any)._score !== undefined && (
+                            <div className="mb-2">
+                              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                🏆 Score:
+                              </span>
+                              <div className="text-sm text-gray-900 dark:text-gray-100 mt-1">
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300">
+                                  {((document as any)._score as number).toFixed(3)}
+                                </span>
+                              </div>
+                            </div>
+                          )}
                           <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
                             <button
                               onClick={(e) => {
@@ -521,6 +811,12 @@ export const TablesPage: React.FC = () => {
                                 {column.field}
                               </th>
                             ))}
+                            {/* Add score column if any document has _score */}
+                            {documentsData?.data.some(doc => (doc as any)._score !== undefined) && (
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600">
+                                🏆 Score
+                              </th>
+                            )}
                             <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600">
                               Actions
                             </th>
@@ -549,6 +845,18 @@ export const TablesPage: React.FC = () => {
                                   />
                                 </td>
                               ))}
+                              {/* Add score column data if any document has _score */}
+                              {documentsData?.data.some(doc => (doc as any)._score !== undefined) && (
+                                <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100 border-b border-gray-200 dark:border-gray-700">
+                                  {(document as any)._score !== undefined ? (
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300">
+                                      {((document as any)._score as number).toFixed(3)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-400 dark:text-gray-500">-</span>
+                                  )}
+                                </td>
+                              )}
                               <td className="px-4 py-2 text-sm border-b border-gray-200 dark:border-gray-700">
                                 <div className="flex gap-2">
                                   <button
@@ -679,6 +987,19 @@ export const TablesPage: React.FC = () => {
           table={selectedTable}
           onClose={() => setShowSchemaEditor(false)}
           onTableUpdated={handleTableUpdated}
+        />
+      )}
+
+      {/* Data Import Modal */}
+      {showImportModal && selectedTable && (
+        <DataImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={() => {
+            setShowImportModal(false);
+            refetchDocuments();
+          }}
+          table={selectedTable}
         />
       )}
     </div>

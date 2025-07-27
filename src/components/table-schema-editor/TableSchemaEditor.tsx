@@ -64,7 +64,7 @@ export const TableSchemaEditor: React.FC<TableSchemaEditorProps> = ({
     modelName: initialModelName
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'add' | 'modify' | 'drop'>('add');
+  const [activeTab, setActiveTab] = useState<'add' | 'modify' | 'drop' | 'settings'>('add');
   const [selectedColumn, setSelectedColumn] = useState<string>('');
   const [modifyType, setModifyType] = useState<string>('bigint');
   const [showVectorConfig, setShowVectorConfig] = useState(false);
@@ -77,10 +77,22 @@ export const TableSchemaEditor: React.FC<TableSchemaEditorProps> = ({
     hnsw_similarity: 'l2'
   });
 
+  const [tableSettings, setTableSettings] = useState<{
+    min_infix_len?: number;
+    [key: string]: any;
+  }>({});
+
   const { mutate: executeAlter } = useCustomMutation();
   const { mutate: refreshTableInfo } = useCustomMutation();
   const { mutate: deleteVectorSettings } = useCustomMutation();
   const dataProvider = useDataProvider();
+
+  // Initialize table settings from table info
+  useEffect(() => {
+    if (table && table.settings) {
+      setTableSettings(table.settings);
+    }
+  }, [table]);
 
   useEffect(() => {
     if (dataProvider) {
@@ -382,6 +394,165 @@ export const TableSchemaEditor: React.FC<TableSchemaEditorProps> = ({
         }
       }
     );
+  };
+
+  const handleUpdateTableSettings = () => {
+    if (!tableSettings.min_infix_len || tableSettings.min_infix_len < 2) {
+      toastMessages.alterError('min_infix_len must be at least 2 to enable fuzzy search');
+      return;
+    }
+
+    // Build the ALTER TABLE command to recreate the table with new settings
+    setIsLoading(true);
+    
+    // Step 1: Get the current table structure
+    const dp = dataProvider();
+    if (!dp || !dp.custom) {
+      toastMessages.alterError('Data provider not available');
+      setIsLoading(false);
+      return;
+    }
+
+    // Create backup table name with timestamp
+    const timestamp = Date.now();
+    const backupTableName = `${table.name}_backup_${timestamp}`;
+    
+    dp.custom({
+      url: "/cli_json",
+      method: "post",
+      payload: { 
+        command: `SHOW CREATE TABLE ${table.name}`
+      }
+    })
+    .then((response: any) => {
+      if (!response.data || !response.data[0]?.data?.[0]?.['Create Table']) {
+        throw new Error('Could not get table structure');
+      }
+      
+      let createStatement = response.data[0].data[0]['Create Table'];
+      
+      // Update the min_infix_len setting in the CREATE TABLE statement
+      if (createStatement.includes('min_infix_len')) {
+        // Replace existing min_infix_len
+        createStatement = createStatement.replace(
+          /min_infix_len\s*=\s*'?\d+'?/gi,
+          `min_infix_len='${tableSettings.min_infix_len}'`
+        );
+      } else {
+        // Add min_infix_len to the end of the settings
+        // Look for the closing parenthesis and settings
+        const settingsMatch = createStatement.match(/\)\s*(.*?)$/s);
+        if (settingsMatch) {
+          const existingSettings = settingsMatch[1].trim();
+          const newSettings = existingSettings 
+            ? `${existingSettings} min_infix_len='${tableSettings.min_infix_len}'`
+            : `min_infix_len='${tableSettings.min_infix_len}'`;
+          createStatement = createStatement.replace(/\)\s*.*?$/s, `) ${newSettings}`);
+        }
+      }
+      
+      // Replace table name with backup name for the backup
+      const backupCreateStatement = createStatement.replace(
+        new RegExp(`CREATE TABLE \`?${table.name}\`?`, 'gi'),
+        `CREATE TABLE ${backupTableName}`
+      );
+      
+      // Execute the table recreation process
+      return executeTableRecreation(backupTableName, backupCreateStatement, createStatement);
+    })
+    .catch((error) => {
+      console.error('Failed to update table settings:', error);
+      toastMessages.alterError(error.message || 'Failed to update table settings');
+      setIsLoading(false);
+    });
+  };
+
+  const executeTableRecreation = async (backupTableName: string, backupCreateStatement: string, newCreateStatement: string) => {
+    const dp = dataProvider();
+    if (!dp || !dp.custom) return;
+
+    try {
+      // Step 1: Create backup table
+      await dp.custom({
+        url: "/cli_json",
+        method: "post",
+        payload: { command: backupCreateStatement }
+      });
+
+      // Step 2: Copy data to backup
+      await dp.custom({
+        url: "/cli_json",
+        method: "post",
+        payload: { command: `INSERT INTO ${backupTableName} SELECT * FROM ${table.name}` }
+      });
+
+      // Step 3: Drop original table
+      await dp.custom({
+        url: "/cli_json",
+        method: "post",
+        payload: { command: `DROP TABLE ${table.name}` }
+      });
+
+      // Step 4: Create new table with updated settings
+      await dp.custom({
+        url: "/cli_json",
+        method: "post",
+        payload: { command: newCreateStatement }
+      });
+
+      // Step 5: Restore data from backup
+      await dp.custom({
+        url: "/cli_json",
+        method: "post",
+        payload: { command: `INSERT INTO ${table.name} SELECT * FROM ${backupTableName}` }
+      });
+
+      // Step 6: Drop backup table
+      await dp.custom({
+        url: "/cli_json",
+        method: "post",
+        payload: { command: `DROP TABLE ${backupTableName}` }
+      });
+
+      toastMessages.alterSuccess();
+      refreshTable();
+      setIsLoading(false);
+    } catch (error: any) {
+      console.error('Table recreation failed:', error);
+      
+      // Attempt to restore from backup if it exists
+      try {
+        const checkBackup = await dp.custom({
+          url: "/cli_json", 
+          method: "post",
+          payload: { command: `SHOW TABLES LIKE '${backupTableName}'` }
+        });
+        
+        if (checkBackup.data?.[0]?.data?.length > 0) {
+          // Backup exists, try to restore
+          await dp.custom({
+            url: "/cli_json",
+            method: "post", 
+            payload: { command: `CREATE TABLE ${table.name} AS SELECT * FROM ${backupTableName}` }
+          });
+          
+          await dp.custom({
+            url: "/cli_json",
+            method: "post",
+            payload: { command: `DROP TABLE ${backupTableName}` }
+          });
+          
+          toastMessages.alterError('Table recreation failed, but original data has been restored');
+        } else {
+          toastMessages.alterError('Table recreation failed and backup not found. Please check your data.');
+        }
+      } catch (restoreError) {
+        console.error('Failed to restore from backup:', restoreError);
+        toastMessages.alterError('Critical error: Table recreation failed and backup restore failed. Please restore manually.');
+      }
+      
+      setIsLoading(false);
+    }
   };
 
   const handleModifyColumn = () => {
@@ -715,15 +886,16 @@ export const TableSchemaEditor: React.FC<TableSchemaEditorProps> = ({
 
               {/* Action Tabs */}
               <div className="mb-6">
-                <div className="grid grid-cols-3 gap-2 p-1 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                <div className="grid grid-cols-4 gap-2 p-1 bg-gray-100 dark:bg-gray-700 rounded-lg">
                   {[
                     { id: 'add', label: 'Add', icon: '➕', color: 'green' },
                     { id: 'modify', label: 'Modify', icon: '✏️', color: 'blue' },
-                    { id: 'drop', label: 'Drop', icon: '🗑️', color: 'red' }
+                    { id: 'drop', label: 'Drop', icon: '🗑️', color: 'red' },
+                    { id: 'settings', label: 'Settings', icon: '⚙️', color: 'purple' }
                   ].map((tab) => (
                     <button
                       key={tab.id}
-                      onClick={() => setActiveTab(tab.id as 'add' | 'modify' | 'drop')}
+                      onClick={() => setActiveTab(tab.id as 'add' | 'modify' | 'drop' | 'settings')}
                       className={`flex items-center justify-center space-x-1 py-2 px-3 rounded-md font-medium text-sm transition-all ${
                         activeTab === tab.id
                           ? `bg-${tab.color}-100 text-${tab.color}-700 dark:bg-${tab.color}-900/50 dark:text-${tab.color}-300 shadow-sm`
@@ -957,6 +1129,92 @@ export const TableSchemaEditor: React.FC<TableSchemaEditorProps> = ({
                           <>
                             <span>🗑️</span>
                             <span>Drop Column</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'settings' && (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-lg">
+                      <h4 className="text-sm font-semibold text-purple-800 dark:text-purple-200 mb-2 flex items-center">
+                        <span className="mr-2">⚙️</span>
+                        Table Settings
+                      </h4>
+                      <p className="text-sm text-purple-700 dark:text-purple-300">
+                        Configure table-level settings that affect search behavior and performance.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Minimum Infix Length (min_infix_len)
+                        </label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                          Required for fuzzy search. Set to 2 or higher to enable fuzzy matching. Warning: Changing this requires table recreation.
+                        </p>
+                        <div className="space-y-2">
+                          <input
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={tableSettings.min_infix_len || ''}
+                            onChange={(e) => setTableSettings(prev => ({
+                              ...prev,
+                              min_infix_len: e.target.value ? parseInt(e.target.value) : undefined
+                            }))}
+                            placeholder="Not set (fuzzy search disabled)"
+                            className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                          />
+                          <div className="text-xs text-gray-500 dark:text-gray-400">
+                            Current value: {table.settings?.min_infix_len || 'Not set'}
+                            {table.settings?.min_infix_len && table.settings.min_infix_len >= 2 && (
+                              <span className="ml-2 text-green-600 dark:text-green-400">✓ Fuzzy search enabled</span>
+                            )}
+                            {(!table.settings?.min_infix_len || table.settings.min_infix_len < 2) && (
+                              <span className="ml-2 text-amber-600 dark:text-amber-400">⚠️ Fuzzy search disabled</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg">
+                        <h5 className="text-sm font-semibold text-amber-800 dark:text-amber-200 mb-1">
+                          ⚠️ Important Note
+                        </h5>
+                        <p className="text-sm text-amber-700 dark:text-amber-300">
+                          Changing min_infix_len requires recreating the table. This operation will:
+                        </p>
+                        <ul className="text-sm text-amber-700 dark:text-amber-300 mt-1 ml-4 list-disc">
+                          <li>Create a backup of your table</li>
+                          <li>Drop and recreate the table with new settings</li>
+                          <li>Restore all data from the backup</li>
+                          <li>This may take time for large tables</li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end pt-4 border-t border-gray-200 dark:border-gray-600">
+                      <button
+                        onClick={handleUpdateTableSettings}
+                        disabled={isLoading || JSON.stringify(tableSettings) === JSON.stringify(table.settings || {})}
+                        className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium flex items-center space-x-2"
+                      >
+                        {isLoading ? (
+                          <>
+                            <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span>Updating...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>⚙️</span>
+                            <span>Update Settings</span>
                           </>
                         )}
                       </button>

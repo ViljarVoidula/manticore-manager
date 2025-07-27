@@ -26,6 +26,12 @@ importers:
       '@refinedev/simple-rest':
         specifier: ^5.0.1
         version: 5.0.10(@refinedev/core@4.57.10(@tanstack/react-query@4.40.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.23))(@types/react@18.3.23)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))
+      '@types/papaparse':
+        specifier: ^5.3.16
+        version: 5.3.16
+      papaparse:
+        specifier: ^5.5.3
+        version: 5.5.3
       react:
         specifier: ^18.0.0
         version: 18.3.1
@@ -691,6 +697,9 @@ packages:
 
   '@types/node@18.19.120':
     resolution: {integrity: sha512-WtCGHFXnVI8WHLxDAt5TbnCM4eSE+nI0QN2NJtwzcgMhht2eNz6V9evJrk+lwC8bCY8OWV5Ym8Jz7ZEyGnKnMA==}
+
+  '@types/papaparse@5.3.16':
+    resolution: {integrity: sha512-T3VuKMC2H0lgsjI9buTB3uuKj3EMD2eap1MOuEQuBQ44EnDx/IkGhU6EwiTf9zG3za4SKlmwKAImdDKdNnCsXg==}
 
   '@types/prop-types@15.7.15':
     resolution: {integrity: sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==}
@@ -3550,6 +3559,10 @@ snapshots:
   '@types/node@18.19.120':
     dependencies:
       undici-types: 5.26.5
+
+  '@types/papaparse@5.3.16':
+    dependencies:
+      '@types/node': 18.19.120
 
   '@types/prop-types@15.7.15': {}
 

@@ -115,51 +115,507 @@ class ManticoreDataProvider implements DataProvider {
   ): Promise<GetListResponse<TData>> {
     const { resource, pagination, sorters, filters, meta } = params;
     try {
-      const searchRequest: ManticoreSearchRequest = {
-        table: resource,
-        limit: pagination?.pageSize || 10,
-        offset: ((pagination?.current || 1) - 1) * (pagination?.pageSize || 10),
-      };
+      const limit = pagination?.pageSize || 10;
+      const offset = ((pagination?.current || 1) - 1) * limit;
 
-      // Handle filters
+      // Check if this is a custom search (vector, advanced, etc.)
+      if (meta?.searchParams) {
+        return this.handleCustomSearch(resource, meta.searchParams, limit, offset);
+      }
+
+      // Use simple SQL SELECT for basic data retrieval - more reliable and consistent
+      let sql = `SELECT * FROM ${resource}`;
+      
+      // Handle basic filters (primarily for search functionality)
       if (filters && filters.length > 0) {
-        const queryFilters = this.buildQueryFromFilters(filters);
-        if (queryFilters) {
-          searchRequest.query = queryFilters;
+        const whereConditions: string[] = [];
+        
+        for (const filter of filters) {
+          const field = (filter as any).field;
+          const operator = (filter as any).operator;
+          const value = (filter as any).value;
+          
+          if (field === "query_string" && value) {
+            // Use MATCH for full-text search
+            whereConditions.push(`MATCH('${String(value).replace(/'/g, "''")}')`);
+          } else if (field && value !== undefined) {
+            // Handle other basic filters
+            const sqlValue = typeof value === 'string' 
+              ? `'${value.replace(/'/g, "''")}'` 
+              : value;
+            
+            switch (operator) {
+              case 'eq':
+                whereConditions.push(`${field} = ${sqlValue}`);
+                break;
+              case 'gt':
+                whereConditions.push(`${field} > ${sqlValue}`);
+                break;
+              case 'lt':
+                whereConditions.push(`${field} < ${sqlValue}`);
+                break;
+              case 'gte':
+                whereConditions.push(`${field} >= ${sqlValue}`);
+                break;
+              case 'lte':
+                whereConditions.push(`${field} <= ${sqlValue}`);
+                break;
+              case 'contains':
+                whereConditions.push(`MATCH('@${field} ${String(value).replace(/'/g, "''")}')`);
+                break;
+              default:
+                whereConditions.push(`${field} = ${sqlValue}`);
+            }
+          }
+        }
+        
+        if (whereConditions.length > 0) {
+          sql += ` WHERE ${whereConditions.join(' AND ')}`;
         }
       }
 
-      // Handle sorters
+      // Handle sorting
       if (sorters && sorters.length > 0) {
-        searchRequest.sort = this.buildSortFromSorters(sorters);
+        const orderBy = sorters.map(sorter => 
+          `${sorter.field} ${sorter.order?.toUpperCase() || 'ASC'}`
+        ).join(', ');
+        sql += ` ORDER BY ${orderBy}`;
       }
 
-      const response: ManticoreSearchResponse = await this.apiCall("/search", {
-        method: "POST",
-        body: JSON.stringify(searchRequest),
-      });
+      // Add pagination
+      sql += ` LIMIT ${offset}, ${limit}`;
 
+      console.log('Executing SQL query:', sql);
+
+      // Execute SQL query
+      const response = await this.executeSql(sql, false);
+      
+      // Handle SQL response format
+      if (response && response.hits && response.hits.hits) {
+        return {
+          data: response.hits.hits.map((hit: any) => ({
+            id: hit._id,
+            ...hit._source,
+            _score: hit._score,
+          })) as unknown as TData[],
+          total: response.hits.total || response.hits.hits.length,
+        };
+      }
+
+      // Fallback for different response formats
       return {
-        data: response.hits.hits.map((hit) => ({
-          id: hit._id,
-          ...hit._source,
-          _score: hit._score,
-        })) as unknown as TData[],
-        total: response.hits.total,
+        data: [] as TData[],
+        total: 0,
       };
     } catch (error) {
       console.error("Error in getList:", error);
-      throw error;
+      
+      // Fallback to search API if SQL fails
+      try {
+        console.log("Falling back to search API");
+        return this.getListFallback(params);
+      } catch (fallbackError) {
+        console.error("Fallback also failed:", fallbackError);
+        throw error;
+      }
     }
+  }
+
+  // Fallback method using search API
+  private async getListFallback<TData extends BaseRecord = BaseRecord>(
+    params: GetListParams
+  ): Promise<GetListResponse<TData>> {
+    const { resource, pagination, sorters, filters } = params;
+    
+    const searchRequest: ManticoreSearchRequest = {
+      index: resource,
+      limit: pagination?.pageSize || 10,
+      offset: ((pagination?.current || 1) - 1) * (pagination?.pageSize || 10),
+    };
+
+    // Simple match-all query for fallback
+    if (!filters || filters.length === 0) {
+      searchRequest.query = { match_all: {} };
+    } else {
+      const queryFilters = this.buildQueryFromFilters(filters);
+      if (queryFilters) {
+        searchRequest.query = queryFilters;
+      }
+    }
+
+    if (sorters && sorters.length > 0) {
+      searchRequest.sort = this.buildSortFromSorters(sorters);
+    }
+
+    const response: ManticoreSearchResponse = await this.apiCall("/search", {
+      method: "POST",
+      body: JSON.stringify(searchRequest),
+    });
+
+    return {
+      data: response.hits.hits.map((hit) => ({
+        id: hit._id,
+        ...hit._source,
+        _score: hit._score,
+      })) as unknown as TData[],
+      total: response.hits.total,
+    };
+  }
+
+  // Handle custom search types (vector, advanced filters)
+  private async handleCustomSearch<TData extends BaseRecord = BaseRecord>(
+    resource: string,
+    searchParams: Record<string, any>,
+    limit: number,
+    offset: number
+  ): Promise<GetListResponse<TData>> {
+    const { type, query, filters, vectorSearch } = searchParams;
+
+    try {
+      if (type === 'vector' && vectorSearch) {
+        // Implement hybrid search following Manticore best practices
+        const hybridQuery = vectorSearch.hybridQuery || '';
+        
+        const searchRequest: ManticoreSearchRequest = {
+          index: resource,
+          knn: {
+            field: vectorSearch.field,
+            query_vector: vectorSearch.vector,
+            k: !hybridQuery.trim() ? vectorSearch.k : Math.max(vectorSearch.k * 10, 1000),
+            ef: vectorSearch.ef,
+          },
+          size: limit,
+          from: offset,
+          track_scores: true,
+        };
+
+        if (hybridQuery.trim()) {
+          if (searchRequest.knn) {
+            // Apply fuzzy search using query string operators instead of options.fuzzy
+            let processedQuery = hybridQuery;
+            
+            if (searchParams.fuzzy?.enabled) {
+              console.log('Applying fuzzy search using query string operators for vector search');
+              // Convert the query to use wildcard operators for fuzzy matching
+              // Split the query into words and add wildcards for fuzzy matching
+              const words = hybridQuery.trim().split(/\s+/);
+              const fuzzyWords = words.map((word: string) => {
+                // For each word, add wildcards to enable fuzzy matching
+                // This allows partial matches like "tisso" to match "tissot"
+                if (word.length >= 3) {
+                  return `*${word}*`;
+                }
+                return word;
+              });
+              processedQuery = fuzzyWords.join(' ');
+              console.log('Fuzzy query transformed:', hybridQuery, '->', processedQuery);
+            }
+            
+            searchRequest.knn.filter = { query_string: processedQuery };
+          }
+        }
+
+        // Add applied facet filters using proper bool query structure
+        if (searchParams.appliedFacetFilters && Object.keys(searchParams.appliedFacetFilters).length > 0) {
+          console.log('Applying facet filters to vector search:', searchParams.appliedFacetFilters);
+          
+          const facetFilterClauses = Object.entries(searchParams.appliedFacetFilters).map(([fieldName, values]) => {
+            const stringValues = values as string[];
+            if (stringValues.length === 1) {
+              return { equals: { [fieldName]: stringValues[0] } };
+            } else {
+              return { bool: { should: stringValues.map((value: string) => ({ equals: { [fieldName]: value } })) } };
+            }
+          });
+
+          if (searchRequest.knn) {
+            const existingFilter = searchRequest.knn.filter;
+            const mustClauses = existingFilter ? [existingFilter, ...facetFilterClauses] : facetFilterClauses;
+            searchRequest.knn.filter = { bool: { must: mustClauses } };
+          }
+        }
+
+        // Add facets if specified
+        if (searchParams.facets && searchParams.facets.length > 0) {
+          searchRequest.aggs = {};
+          searchParams.facets.forEach((facet: { field: string; size?: number; order?: 'asc' | 'desc' }, index: number) => {
+            const aggName = `facet_${facet.field}_${index}`;
+            if (searchRequest.aggs) {
+              searchRequest.aggs[aggName] = {
+                terms: { field: facet.field, size: facet.size || 20 }
+              };
+              if (facet.order && searchRequest.aggs[aggName].terms) {
+                searchRequest.aggs[aggName].terms.order = { _count: facet.order };
+              }
+            }
+          });
+        }
+
+        console.log('Executing vector search request:', JSON.stringify(searchRequest, null, 2));
+        
+        const response: ManticoreSearchResponse = await this.apiCall("/search", {
+          method: "POST",
+          body: JSON.stringify(searchRequest),
+        });
+
+        const result: GetListResponse<TData> & { facets?: typeof response.aggregations } = {
+          data: response.hits.hits.map((hit) => ({
+            id: hit._id,
+            ...hit._source,
+            _score: hit._score,
+            _knn_dist: hit._knn_dist,
+          })) as unknown as TData[],
+          total: response.hits.total,
+        };
+
+        if (response.aggregations) {
+          result.facets = response.aggregations;
+        }
+        
+        return result;
+      }
+
+      if (type === 'basic' && query) {
+        // Build JSON search request for proper fuzzy search and facets support
+        const searchRequest: ManticoreSearchRequest = {
+          index: resource,
+          query: { match_all: {} },
+          limit,
+          offset
+        };
+        
+        // Handle fuzzy search using query string operators
+        if (searchParams.fuzzy?.enabled) {
+          console.log('Applying fuzzy search using query string operators for basic search');
+          
+          // Convert the query to use wildcard operators for fuzzy matching
+          const words = query.trim().split(/\s+/);
+          const fuzzyWords = words.map((word: string) => {
+            // For each word, add wildcards to enable fuzzy matching
+            if (word.length >= 3) {
+              return `*${word}*`;
+            }
+            return word;
+          });
+          const fuzzyQuery = fuzzyWords.join(' ');
+          
+          console.log('Fuzzy query transformed:', query, '->', fuzzyQuery);
+          
+          searchRequest.query = {
+            query_string: fuzzyQuery
+          };
+        } else {
+          // Use match query for regular search
+          searchRequest.query = {
+            match: { '*': query }
+          };
+        }
+        
+        // Add ranker if specified
+        if (searchParams.ranker && searchParams.ranker !== 'proximity_bm25') {
+          if (!searchRequest.options) searchRequest.options = {};
+          searchRequest.options.ranker = searchParams.ranker;
+          if (searchParams.ranker === 'expr' && searchParams.rankerExpression) {
+            searchRequest.options.ranker = `expr('${searchParams.rankerExpression}')`;
+          }
+        }
+        
+        // Add field weights if specified
+        if (searchParams.fieldWeights && Object.keys(searchParams.fieldWeights).length > 0) {
+          if (!searchRequest.options) searchRequest.options = {};
+          searchRequest.options.field_weights = searchParams.fieldWeights;
+        }
+        
+        // Add sorting if specified
+        if (searchParams.sort && searchParams.sort.length > 0) {
+          searchRequest.sort = searchParams.sort.map((s: any) => {
+            // Handle custom expressions
+            if (s.field === 'custom' && s.expression) {
+              return { [s.expression]: { order: s.order } };
+            }
+            // Handle regular field sorting
+            return { [s.field]: { order: s.order } };
+          });
+        }
+        
+        // Add track_scores if specified
+        if (searchParams.trackScores) {
+          searchRequest.track_scores = true;
+        }
+        
+        // Add applied facet filters using proper bool query structure
+        if (searchParams.appliedFacetFilters && Object.keys(searchParams.appliedFacetFilters).length > 0) {
+          console.log('Applying facet filters:', searchParams.appliedFacetFilters);
+          
+          // Build facet filter clauses
+          const facetFilterClauses = Object.entries(searchParams.appliedFacetFilters).map(([fieldName, values]) => {
+            const stringValues = values as string[]; // Type assertion since we know this is string[]
+            if (stringValues.length === 1) {
+              // Single value - use equals
+              return { equals: { [fieldName]: stringValues[0] } };
+            } else {
+              // Multiple values for the same field - use should query (OR logic)
+              return {
+                bool: {
+                  should: stringValues.map((value: string) => ({ equals: { [fieldName]: value } }))
+                }
+              };
+            }
+          });
+          
+          // Wrap the existing query in a bool query with facet filters
+          const originalQuery = searchRequest.query;
+          searchRequest.query = {
+            bool: {
+              must: [originalQuery, ...facetFilterClauses]
+            }
+          };
+          
+          console.log('Updated query with facet filters:', JSON.stringify(searchRequest.query, null, 2));
+        }
+        
+        // Add facets if specified
+        if (searchParams.facets && searchParams.facets.length > 0) {
+          searchRequest.aggs = {};
+          searchParams.facets.forEach((facet: any, index: number) => {
+            const aggName = `facet_${facet.field}_${index}`;
+            if(searchRequest.aggs) {
+              searchRequest.aggs[aggName] = {
+                terms: {
+                  field: facet.field,
+                  size: facet.size || 20
+                }
+              };
+              if (facet.order) {
+                // Use _count for sorting by frequency, _key for sorting by field value
+                if(searchRequest.aggs[aggName].terms) {
+                  searchRequest.aggs[aggName].terms.order = { _count: facet.order };
+                }
+              }
+            }
+          });
+        }
+        
+        console.log('Executing enhanced basic search:', JSON.stringify(searchRequest, null, 2));
+        
+        const response: ManticoreSearchResponse = await this.apiCall("/search", {
+          method: "POST",
+          body: JSON.stringify(searchRequest),
+        });
+        
+        const result: GetListResponse<TData> & { facets?: typeof response.aggregations } = {
+          data: response.hits.hits.map((hit) => ({
+            id: hit._id,
+            ...hit._source,
+            _score: hit._score,
+          })) as unknown as TData[],
+          total: response.hits.total,
+        };
+        
+        // Add facets to result if present
+        if (response.aggregations) {
+          result.facets = response.aggregations;
+        }
+        
+        return result;
+      }
+
+      if (type === 'advanced' && filters) {
+        // Build SQL query from advanced filters
+        let sql = `SELECT * FROM ${resource}`;
+        const whereConditions: string[] = [];
+        
+        for (const filter of filters) {
+          const { field, operator, value } = filter;
+          if (!field || !operator || value === undefined || value === '') continue;
+          
+          const sqlValue = typeof value === 'string' 
+            ? `'${value.replace(/'/g, "''")}'` 
+            : value;
+          
+          switch (operator) {
+            case 'equals':
+              whereConditions.push(`${field} = ${sqlValue}`);
+              break;
+            case 'gt':
+              whereConditions.push(`${field} > ${sqlValue}`);
+              break;
+            case 'lt':
+              whereConditions.push(`${field} < ${sqlValue}`);
+              break;
+            case 'gte':
+              whereConditions.push(`${field} >= ${sqlValue}`);
+              break;
+            case 'lte':
+              whereConditions.push(`${field} <= ${sqlValue}`);
+              break;
+            case 'match':
+              whereConditions.push(`MATCH('@${field} ${String(value).replace(/'/g, "''")}')`);
+              break;
+            case 'in': {
+              const values = String(value).split(',').map(v => `'${v.trim().replace(/'/g, "''")}'`).join(',');
+              whereConditions.push(`${field} IN (${values})`);
+              break;
+            }
+            default:
+              whereConditions.push(`${field} = ${sqlValue}`);
+          }
+        }
+        
+        if (whereConditions.length > 0) {
+          sql += ` WHERE ${whereConditions.join(' AND ')}`;
+        }
+        
+        sql += ` LIMIT ${offset}, ${limit}`;
+        
+        console.log('Executing advanced search SQL:', sql);
+        
+        const response = await this.executeSql(sql, false);
+        
+        if (response && response.hits && response.hits.hits) {
+          return {
+            data: response.hits.hits.map((hit: any) => ({
+              id: hit._id,
+              ...hit._source,
+              _score: hit._score,
+            })) as unknown as TData[],
+            total: response.hits.total || response.hits.hits.length,
+          };
+        }
+      }
+    } catch (error) {
+      console.error('Error in custom search:', error);
+      // Fall back to basic data retrieval on error
+      try {
+        const sql = `SELECT * FROM ${resource} LIMIT ${offset}, ${limit}`;
+        const response = await this.executeSql(sql, false);
+        
+        if (response && response.hits && response.hits.hits) {
+          return {
+            data: response.hits.hits.map((hit: any) => ({
+              id: hit._id,
+              ...hit._source,
+              _score: hit._score,
+            })) as unknown as TData[],
+            total: response.hits.total || response.hits.hits.length,
+          };
+        }
+      } catch (fallbackError) {
+        console.error('Fallback search also failed:', fallbackError);
+      }
+    }
+
+    // Default fallback
+    return { data: [] as TData[], total: 0 };
   }
 
   async getOne<TData extends BaseRecord = BaseRecord>(
     params: GetOneParams
   ): Promise<GetOneResponse<TData>> {
-    const { resource, id, meta } = params;
+    const { resource, id } = params;
     try {
       const searchRequest: ManticoreSearchRequest = {
-        table: resource,
+        index: resource,
         query: {
           equals: { id: id },
         },
@@ -188,23 +644,23 @@ class ManticoreDataProvider implements DataProvider {
     }
   }
 
-  async create<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
+  async create<TData extends BaseRecord = BaseRecord, TVariables = Record<string, unknown>>(
     params: CreateParams<TVariables>
   ): Promise<CreateResponse<TData>> {
     const { resource, variables } = params;
     try {
-      const docData = { ...variables } as any;
+      const docData = { ...variables };
       
       // Build proper insert request according to Manticore API spec
       const request: InsertDocumentRequest = {
-        table: resource,
-        doc: docData,
+        index: resource,
+        doc: docData as Record<string, unknown>,
       };
 
       // Handle explicit ID if provided
-      if (variables && typeof variables === 'object' && 'id' in variables && (variables as any).id) {
-        request.id = (variables as any).id as number;
-        delete docData.id; // Remove from doc since it's set at request level
+      if (variables && typeof variables === 'object' && 'id' in variables && (variables as {id?: number}).id) {
+        request.id = (variables as {id: number}).id;
+        delete (docData as {id?: number}).id; // Remove from doc since it's set at request level
       }
 
       console.log('Executing INSERT request:', request);
@@ -226,16 +682,16 @@ class ManticoreDataProvider implements DataProvider {
     }
   }
 
-  async update<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
+  async update<TData extends BaseRecord = BaseRecord, TVariables = Record<string, unknown>>(
     params: UpdateParams<TVariables>
   ): Promise<UpdateResponse<TData>> {
     const { resource, id, variables } = params;
     try {
       // Build proper update request according to Manticore API spec
       const request: UpdateDocumentRequest = {
-        table: resource,
+        index: resource,
         id: Number(id),
-        doc: variables as any,
+        doc: variables as Record<string, unknown>,
       };
 
       console.log('Executing UPDATE request:', request);
@@ -257,14 +713,14 @@ class ManticoreDataProvider implements DataProvider {
     }
   }
 
-  async deleteOne<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
+  async deleteOne<TData extends BaseRecord = BaseRecord, TVariables = Record<string, unknown>>(
     params: DeleteOneParams<TVariables>
   ): Promise<DeleteOneResponse<TData>> {
     const { resource, id } = params;
     try {
       // Build proper delete request according to Manticore API spec
       const request: DeleteDocumentRequest = {
-        table: resource,
+        index: resource,
         id: Number(id),
       };
 
@@ -284,16 +740,16 @@ class ManticoreDataProvider implements DataProvider {
     }
   }
 
-  async deleteMany<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
+  async deleteMany<TData extends BaseRecord = BaseRecord, TVariables = Record<string, unknown>>(
     params: DeleteManyParams<TVariables>
   ): Promise<DeleteManyResponse<TData>> {
     const { resource, ids } = params;
     try {
       // For multiple deletes, we need to use individual requests since Manticore doesn't support bulk delete by IDs
       const results = await Promise.all(
-        ids.map(async (id: any) => {
+        ids.map(async (id) => {
           const request: DeleteDocumentRequest = {
-            table: resource,
+            index: resource,
             id: Number(id),
           };
           await this.apiCall("/delete", {
@@ -320,7 +776,7 @@ class ManticoreDataProvider implements DataProvider {
   custom = async <TData extends BaseRecord = BaseRecord, TQuery = unknown, TPayload = unknown>(
     params: CustomParams<TQuery, TPayload>
   ): Promise<CustomResponse<TData>> => {
-    const { url, method, payload, headers, meta } = params;
+    const { url, method, payload, headers } = params;
     
     if (url.startsWith("/embeddings")) {
       const result = await this.apiCall(url.replace('/embeddings', ''), {
@@ -481,16 +937,40 @@ class ManticoreDataProvider implements DataProvider {
         console.warn(`⚠️ No data in DESCRIBE response for ${tableName}`);
       }
 
+      // Get table settings to check for fuzzy search support
+      const tableSettings: any = {};
+      try {
+        const settingsResponse = await this.executeCliCommand(`SHOW CREATE TABLE ${tableName}`);
+        console.log(`📝 SHOW CREATE TABLE ${tableName} response:`, JSON.stringify(settingsResponse, null, 2));
+        
+        if (settingsResponse.length > 0 && settingsResponse[0].data) {
+          const createStatement = settingsResponse[0].data[0]?.['Create Table'] || '';
+          
+          // Parse min_infix_len from the CREATE TABLE statement
+          const minInfixMatch = (createStatement as string).match(/min_infix_len\s*=\s*'?(\d+)'?/i);
+          if (minInfixMatch) {
+            tableSettings.min_infix_len = parseInt(minInfixMatch[1]);
+            console.log(`✅ Table ${tableName} has min_infix_len=${tableSettings.min_infix_len}`);
+          } else {
+            console.log(`⚠️ Table ${tableName} does not have min_infix_len configured`);
+          }
+        }
+      } catch (settingsError) {
+        console.warn(`⚠️ Could not get table settings for ${tableName}:`, settingsError);
+      }
+
       console.log(`✅ Final columns for ${tableName}:`, columns);
       return {
         name: tableName,
         columns,
+        settings: tableSettings
       };
     } catch (error) {
       console.error(`❌ Error getting table info for ${tableName}:`, error);
       return {
         name: tableName,
         columns: [],
+        settings: {}
       };
     }
   }
@@ -550,6 +1030,35 @@ class ManticoreDataProvider implements DataProvider {
       acc[sorter.field] = { order: sorter.order };
       return acc;
     }, {});
+  }
+
+  private processBasicQuery(query: string): string {
+    // This method is now mainly used for fallback SQL queries
+    // Remove extra whitespace
+    query = query.trim();
+    
+    // If it's already a complex query with operators, return as-is
+    if (query.includes('"') || query.includes('*') || query.includes('@') || query.includes('|') || query.includes('&')) {
+      return query;
+    }
+    
+    // Split into words and process each
+    const words = query.split(/\s+/);
+    
+    if (words.length === 1) {
+      // Single word - add wildcards for partial matching
+      const word = words[0];
+      if (word.length >= 2) {
+        // For single words, use prefix matching (*word*) to catch partial matches
+        return `*${word}*`;
+      }
+      return word;
+    } else {
+      // Multiple words - create a more flexible query
+      // Option 1: All words with wildcards (more permissive)
+      const wildcardWords = words.map(word => word.length >= 2 ? `*${word}*` : word);
+      return wildcardWords.join(' ');
+    }
   }
 }
 
