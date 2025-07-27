@@ -276,7 +276,12 @@ export const Dashboard: React.FC = () => {
                 Tables
               </h3>
               <p className="text-gray-600 dark:text-gray-300 text-xs lg:text-sm truncate">
-                {totalTables > 0 ? `${totalRecords.toLocaleString()} total records` : 'No tables found'}
+                {totalTables === 0 
+                  ? 'No tables found' 
+                  : totalTables === 1 
+                    ? `${totalRecords.toLocaleString()} records` 
+                    : `${totalRecords.toLocaleString()} records across ${totalTables} tables`
+                }
               </p>
             </div>
             <div className="text-xl lg:text-2xl ml-2">🗂️</div>
@@ -290,19 +295,49 @@ export const Dashboard: React.FC = () => {
             </p>
           </div>
           
-          {/* Table breakdown - Mobile optimized */}
+          {/* Table breakdown - Improved for many tables */}
           {tableStats.length > 0 && (
-            <div className="mt-3 lg:mt-4 space-y-1 lg:space-y-2 max-h-24 lg:max-h-32 overflow-y-auto">
-              {tableStats.map((stat) => (
-                <div key={stat.name} className="flex justify-between items-center text-xs lg:text-sm">
-                  <span className="text-gray-600 dark:text-gray-300 truncate pr-2">
-                    {stat.name}
-                  </span>
-                  <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">
-                    {stat.loading ? '...' : stat.error ? 'Error' : stat.recordCount.toLocaleString()}
-                  </span>
+            <div className="mt-3 lg:mt-4">
+              {tableStats.length <= 5 ? (
+                // Show all tables if 5 or fewer
+                <div className="space-y-1 lg:space-y-2">
+                  {tableStats.map((stat) => (
+                    <div key={stat.name} className="flex justify-between items-center text-xs lg:text-sm">
+                      <span className="text-gray-600 dark:text-gray-300 truncate pr-2">
+                        {stat.name}
+                      </span>
+                      <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">
+                        {stat.loading ? '...' : stat.error ? 'Error' : stat.recordCount.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                // Show first 4 tables + "and X more" if more than 5
+                <div className="space-y-1 lg:space-y-2">
+                  {tableStats.slice(0, 4).map((stat) => (
+                    <div key={stat.name} className="flex justify-between items-center text-xs lg:text-sm">
+                      <span className="text-gray-600 dark:text-gray-300 truncate pr-2">
+                        {stat.name}
+                      </span>
+                      <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">
+                        {stat.loading ? '...' : stat.error ? 'Error' : stat.recordCount.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between items-center text-xs lg:text-sm pt-1 border-t border-gray-200 dark:border-gray-600">
+                    <span className="text-gray-500 dark:text-gray-400 italic">
+                      and {tableStats.length - 4} more tables
+                    </span>
+                    <button
+                      onClick={() => navigate('/tables')}
+                      className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 font-medium"
+                    >
+                      View all →
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

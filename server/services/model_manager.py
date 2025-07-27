@@ -422,8 +422,21 @@ class ModelManager:
         return embeddings.tolist()
     
     def get_model_info(self, model_name: str) -> Optional[ModelInfo]:
-        """Get information about a specific model."""
-        return self._model_info.get(model_name)
+        """Get information about a specific model, loaded or available."""
+        # Return info for loaded model if present
+        if model_name in self._model_info:
+            return self._model_info[model_name]
+        # If not loaded, return info from available models
+        if model_name in self._available_models:
+            model_cfg = self._available_models[model_name]
+            return ModelInfo(
+                name=model_name,
+                type=model_cfg["type"],
+                dimensions=model_cfg["dimensions"],
+                is_loaded=False,
+                description=model_cfg.get("description")
+            )
+        return None
     
     def list_models(self) -> List[ModelInfo]:
         """List all models and their status."""
@@ -458,29 +471,13 @@ class ModelManager:
         table_name: str,
         column_name: str,
         model_name: str,
-        knn_type: str = "HNSW",
-        similarity_metric: str = "L2",
         combined_fields: Optional[Dict[str, Any]] = None
     ) -> None:
         """Save vector column metadata including model dimensions and combined fields configuration."""
-        dimensions = self.get_model_dimensions(model_name)
-        if dimensions is None:
-            # Try to load the model to get dimensions
-            model_config = self._available_models.get(model_name)
-            if model_config:
-                await self.load_model(model_name, model_config["type"])
-                dimensions = self.get_model_dimensions(model_name)
-        
-        if dimensions is None:
-            raise ValueError(f"Cannot determine dimensions for model: {model_name}")
-        
         await database_initializer.save_vector_column_settings(
             table_name=table_name,
             column_name=column_name,
             model_name=model_name,
-            dimensions=dimensions,
-            knn_type=knn_type,
-            similarity_metric=similarity_metric,
             combined_fields=combined_fields
         )
     

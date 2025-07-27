@@ -1,6 +1,13 @@
-import React, { useState } from "react";
-import { useCustomMutation } from "@refinedev/core";
+import React, { useState, useEffect } from "react";
+import { useCustomMutation, useDataProvider } from "@refinedev/core";
 import { toastMessages } from "../../utils/toast";
+import { VectorConfigModal } from "../vector-config-modal";
+import { Modal, FormActions } from "../forms";
+
+interface Model {
+  name: string;
+  dimensions: number;
+}
 
 interface TableCreatorProps {
   isOpen: boolean;
@@ -20,18 +27,68 @@ interface ColumnDefinition {
   hnswM?: number;
   hnswEfConstruction?: number;
   quantization?: '8bit' | '1bit' | '1bitsimple';
+  modelName?: string;
 }
 
 export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onSuccess }) => {
   const [tableName, setTableName] = useState("");
+  const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [columns, setColumns] = useState<ColumnDefinition[]>([
     { name: 'id', type: 'bigint', indexed: true, stored: true },
     { name: 'data', type: 'json', indexed: false, stored: true }
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showVectorConfig, setShowVectorConfig] = useState(false);
+  const [vectorColumnToConfig, setVectorColumnToConfig] = useState<{
+    tableName: string;
+    columnName: string;
+  } | null>(null);
 
   const { mutate: createTable } = useCustomMutation();
+  const dataProvider = useDataProvider();
+
+  useEffect(() => {
+    const fetchModels = async () => {
+      if (!isOpen || !dataProvider) return;
+      
+      try {
+        const dp = dataProvider();
+        if (!dp || !dp.custom) return;
+        
+        const response = await dp.custom({
+          url: "/embeddings/models",
+          method: "get"
+        });
+        
+        // Use the same logic as TableSchemaEditor - get available_models for all available models
+        const availableModels = response.data?.available_models || [];
+        // If loaded models have details, merge them
+        const loadedModels = response.data?.models || [];
+        // Map available models to details (dimensions, description, etc)
+        const modelDetailsMap: Record<string, Model> = {};
+        loadedModels.forEach((m: Model) => {
+          modelDetailsMap[m.name] = m;
+        });
+        // Compose final list with details from loaded or just name
+        const modelsWithDetails = availableModels.map((name: string) => {
+          const details = modelDetailsMap[name];
+          return details ? details : { name };
+        });
+        
+        console.log('TableCreator: Available models from API:', availableModels);
+        console.log('TableCreator: Loaded models with details:', loadedModels);
+        console.log('TableCreator: Final models with details:', modelsWithDetails);
+        
+        setAvailableModels(modelsWithDetails);
+      } catch (error) {
+        console.error('Failed to fetch models:', error);
+        setAvailableModels([]);
+      }
+    };
+
+    fetchModels();
+  }, [isOpen, dataProvider]);
 
   const handleAddColumn = () => {
     setColumns([...columns, { 
@@ -54,9 +111,51 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
     }
   };
 
-  const handleColumnChange = (index: number, field: keyof ColumnDefinition, value: string | boolean | number | undefined) => {
+  const handleColumnChange = async (index: number, field: keyof ColumnDefinition, value: string | boolean | number | undefined) => {
     const newColumns = [...columns];
-    newColumns[index] = { ...newColumns[index], [field]: value };
+    const column = newColumns[index];
+    
+    if (field === 'modelName' && typeof value === 'string') {
+        console.log('TableCreator: Model selected:', value);
+        if (value === 'custom') {
+            column.modelName = 'custom';
+            console.log('TableCreator: Set column.modelName to custom');
+        } else {
+            column.modelName = value;
+            console.log('TableCreator: Set column.modelName to:', value);
+            
+            // Fetch model info from API to get accurate dimensions
+            try {
+                if (dataProvider) {
+                    const dp = dataProvider();
+                    if (dp && dp.custom) {
+                        // Encode model name for URL
+                        const encodedName = encodeURIComponent(value);
+                        const response = await dp.custom({
+                            url: `/embeddings/models/${encodedName}`,
+                            method: "get"
+                        });
+                        const info = response.data;
+                        if (info && info.dimensions) {
+                            column.vectorDimensions = info.dimensions;
+                            console.log('TableCreator: Updated dimensions from API:', info.dimensions);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.log('TableCreator: API fetch failed, falling back to local model data');
+                // Fallback to local model details if API fails
+                const model = availableModels.find(m => m.name === value);
+                if (model && model.dimensions) {
+                    column.vectorDimensions = model.dimensions;
+                    console.log('TableCreator: Updated dimensions from local data:', model.dimensions);
+                }
+            }
+        }
+    } else {
+        newColumns[index] = { ...newColumns[index], [field]: value };
+    }
+    
     setColumns(newColumns);
   };
 
@@ -119,11 +218,28 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
         values: { command: createTableSql },
       },
       {
-        onSuccess: () => {
+        onSuccess: async () => {
+          // Check if there are any vector columns that need configuration
+          const vectorColumns = columns.filter(col => col.type === 'float_vector');
+          
           setIsLoading(false);
           toastMessages.tableCreated(tableName);
-          onSuccess();
-          handleClose();
+          
+          if (vectorColumns.length > 0) {
+            // Show vector configuration modal for the first vector column
+            const firstVectorColumn = vectorColumns[0];
+            setVectorColumnToConfig({
+              tableName: tableName,
+              columnName: firstVectorColumn.name
+            });
+            setShowVectorConfig(true);
+            
+            // Don't close the main dialog yet - wait for vector config to complete
+          } else {
+            // No vector columns, proceed normally
+            onSuccess();
+            handleClose();
+          }
         },
         onError: (error: unknown) => {
           setError((error as Error)?.message || "Failed to create table");
@@ -141,32 +257,43 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
       { name: 'data', type: 'json', indexed: false, stored: true }
     ]);
     setError(null);
+    setShowVectorConfig(false);
+    setVectorColumnToConfig(null);
     onClose();
+  };
+
+  const handleVectorConfigComplete = () => {
+    setShowVectorConfig(false);
+    setVectorColumnToConfig(null);
+    onSuccess();
+    handleClose();
+  };
+
+  const handleVectorConfigClose = () => {
+    setShowVectorConfig(false);
+    setVectorColumnToConfig(null);
+    // Still call onSuccess and handleClose even if user cancels vector config
+    onSuccess();
+    handleClose();
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white">Create New Table</h3>
-            <button
-              onClick={handleClose}
-              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-            >
-              ✕
-            </button>
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={handleClose}
+        title="Create New Table"
+        size="4xl"
+      >
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/50 border border-red-200 dark:border-red-700 rounded-md">
+            <p className="text-red-700 dark:text-red-300 text-sm">{error}</p>
           </div>
+        )}
 
-          {error && (
-            <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/50 border border-red-200 dark:border-red-700 rounded-md">
-              <p className="text-red-700 dark:text-red-300 text-sm">{error}</p>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
             {/* Table Name */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -296,17 +423,34 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
                         <div className="grid grid-cols-2 gap-4">
                           <div>
                             <label className="block text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">
+                              Embedding Model
+                            </label>
+                            <select
+                              value={column.modelName || ''}
+                              onChange={(e) => handleColumnChange(index, 'modelName', e.target.value)}
+                              className="w-full p-2 text-sm border border-blue-300 dark:border-blue-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">Select a model...</option>
+                              {availableModels.map(model => (
+                                <option key={model.name} value={model.name}>{model.name}</option>
+                              ))}
+                              <option value="custom">Custom</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">
                               Dimensions
                             </label>
                             <input
                               type="number"
                               min="1"
                               max="4096"
-                              value={column.vectorDimensions || 128}
+                              value={column.vectorDimensions || ''}
                               onChange={(e) => handleColumnChange(index, 'vectorDimensions', parseInt(e.target.value))}
                               className="w-full p-2 text-sm border border-blue-300 dark:border-blue-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500"
+                              readOnly={column.modelName !== 'custom'}
                             />
-                            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">Number of vector dimensions (e.g., 128, 256, 512, 768, 1024)</p>
+                            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">Dimensions are set by the model, unless 'Custom' is selected.</p>
                           </div>
                           <div>
                             <label className="block text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">
@@ -460,25 +604,30 @@ export const TableCreator: React.FC<TableCreatorProps> = ({ isOpen, onClose, onS
               </pre>
             </div>
 
-            <div className="flex justify-end gap-3 pt-4">
-              <button
-                type="button"
-                onClick={handleClose}
-                className="px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800 text-white rounded-md disabled:bg-gray-400 dark:disabled:bg-gray-600"
-              >
-                {isLoading ? 'Creating...' : 'Create Table'}
-              </button>
-            </div>
+            <FormActions
+              onCancel={handleClose}
+              submitLabel={isLoading ? 'Creating...' : 'Create Table'}
+              isLoading={isLoading}
+            />
           </form>
-        </div>
-      </div>
-    </div>
-  );
-};
+        </Modal>
+
+        {/* Vector Configuration Modal */}
+        {vectorColumnToConfig && (
+          <VectorConfigModal
+            isOpen={showVectorConfig}
+            onClose={handleVectorConfigClose}
+            onSuccess={handleVectorConfigComplete}
+            tableName={vectorColumnToConfig.tableName}
+            columnName={vectorColumnToConfig.columnName}
+            initialConfig={{
+              model_name: columns.find(c => c.name === vectorColumnToConfig.columnName)?.modelName,
+              knn_type: columns.find(c => c.name === vectorColumnToConfig.columnName)?.knnType,
+              similarity_metric: columns.find(c => c.name === vectorColumnToConfig.columnName)?.similarityMetric,
+              dimensions: columns.find(c => c.name === vectorColumnToConfig.columnName)?.vectorDimensions,
+            }}
+          />
+        )}
+      </>
+    );
+  };

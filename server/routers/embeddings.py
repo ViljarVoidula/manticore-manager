@@ -17,6 +17,7 @@ from ..models.embeddings import (
 from ..services.embedding_service import embedding_service
 from ..services.multi_field_service import multi_field_service
 from ..services.model_manager import model_manager
+from ..services.database_init import database_initializer
 
 
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
@@ -130,24 +131,26 @@ async def unload_model(model_name: str):
         )
 
 
-@models_router.get("/{model_name}", response_model=ModelInfo)
+@models_router.get("/{model_name:path}", response_model=ModelInfo)
 async def get_model_info(model_name: str):
     """Get information about a specific model."""
-    try:
-        model_info = model_manager.get_model_info(model_name)
-        if not model_info:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Model {model_name} not found"
-            )
-        return model_info
-    except HTTPException:
-        raise
-    except Exception as e:
+    import urllib.parse
+    # Decode URL-encoded model_name
+    decoded_name = urllib.parse.unquote(model_name)
+    # Try exact match first
+    model_info = model_manager.get_model_info(decoded_name)
+    # If not found, try case-insensitive match
+    if not model_info:
+        for available in model_manager.get_available_models():
+            if available.lower() == decoded_name.lower():
+                model_info = model_manager.get_model_info(available)
+                break
+    if not model_info:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model {decoded_name} not found"
         )
+    return model_info
 
 
 # Vector column management routes
@@ -159,8 +162,6 @@ async def register_vector_column(
     table_name: str,
     column_name: str,
     model_name: str,
-    knn_type: str = "HNSW",
-    similarity_metric: str = "L2",
     combined_fields: dict = None
 ):
     """Register a vector column with its model and settings.
@@ -175,8 +176,6 @@ async def register_vector_column(
             table_name=table_name,
             column_name=column_name,
             model_name=model_name,
-            knn_type=knn_type,
-            similarity_metric=similarity_metric,
             combined_fields=combined_fields
         )
         return {
@@ -185,8 +184,6 @@ async def register_vector_column(
             "column_name": column_name,
             "model_name": model_name,
             "dimensions": model_manager.get_model_dimensions(model_name),
-            "knn_type": knn_type,
-            "similarity_metric": similarity_metric,
             "combined_fields": combined_fields
         }
     except Exception as e:
@@ -235,6 +232,36 @@ async def get_vector_column_info(table_name: str, column_name: str):
         return column_info
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@vector_router.delete("/tables/{table_name}/columns/{column_name}")
+async def delete_vector_column_settings(table_name: str, column_name: str):
+    """Delete vector column settings."""
+    try:
+        await database_initializer.delete_vector_column_settings(table_name, column_name)
+        return {
+            "message": f"Vector column settings for {table_name}.{column_name} deleted successfully"
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@vector_router.delete("/tables/{table_name}")
+async def delete_table_vector_settings(table_name: str):
+    """Delete all vector column settings for a table."""
+    try:
+        await database_initializer.delete_table_vector_settings(table_name)
+        return {
+            "message": f"All vector column settings for table {table_name} deleted successfully"
+        }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

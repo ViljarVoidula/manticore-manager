@@ -28,13 +28,15 @@ import {
   TableInfo,
   TableColumn,
 } from "../types/manticore";
-import { getManticoreBaseUrl } from "../config/environment";
+import { getManticoreBaseUrl, getEmbeddingsBaseUrl } from "../config/environment";
 
 class ManticoreDataProvider implements DataProvider {
   private baseUrl: string;
+  private embeddingsBaseUrl: string;
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl || getManticoreBaseUrl();
+    this.embeddingsBaseUrl = getEmbeddingsBaseUrl();
     
     // Bind methods to preserve 'this' context
     this.getList = this.getList.bind(this);
@@ -51,9 +53,10 @@ class ManticoreDataProvider implements DataProvider {
 
   private async apiCall<T = any>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    baseUrl?: string
   ): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+    const url = `${baseUrl || this.baseUrl}${endpoint}`;
     
     const response = await fetch(url, {
       headers: {
@@ -64,15 +67,23 @@ class ManticoreDataProvider implements DataProvider {
     });
 
     if (!response.ok) {
-      const errorData: ManticoreErrorResponse = await response.json().catch(() => ({
+      const errorData: any = await response.json().catch(() => ({
         error: `HTTP ${response.status}: ${response.statusText}`,
         status: response.status,
       }));
-      throw new Error(
-        typeof errorData.error === "string"
-          ? errorData.error
-          : errorData.error.reason || "Unknown error"
-      );
+      
+      let errorMessage = "Unknown error";
+      if (typeof errorData.error === "string") {
+        errorMessage = errorData.error;
+      } else if (errorData.error && typeof errorData.error === "object" && errorData.error.reason) {
+        errorMessage = errorData.error.reason;
+      } else if (errorData.detail) {
+        errorMessage = errorData.detail;
+      } else {
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      
+      throw new Error(errorMessage);
     }
 
     return response.json();
@@ -180,24 +191,29 @@ class ManticoreDataProvider implements DataProvider {
   async create<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
     params: CreateParams<TVariables>
   ): Promise<CreateResponse<TData>> {
-    const { resource, variables, meta } = params;
+    const { resource, variables } = params;
     try {
       const docData = { ...variables } as any;
+      
+      // Build proper insert request according to Manticore API spec
       const request: InsertDocumentRequest = {
         table: resource,
         doc: docData,
       };
 
+      // Handle explicit ID if provided
       if (variables && typeof variables === 'object' && 'id' in variables && (variables as any).id) {
         request.id = (variables as any).id as number;
-        delete docData.id;
+        delete docData.id; // Remove from doc since it's set at request level
       }
 
+      console.log('Executing INSERT request:', request);
+      
       const response: ManticoreSuccessResponse = await this.apiCall("/insert", {
         method: "POST",
         body: JSON.stringify(request),
       });
-
+      
       return {
         data: {
           id: response.id,
@@ -213,15 +229,18 @@ class ManticoreDataProvider implements DataProvider {
   async update<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
     params: UpdateParams<TVariables>
   ): Promise<UpdateResponse<TData>> {
-    const { resource, id, variables, meta } = params;
+    const { resource, id, variables } = params;
     try {
+      // Build proper update request according to Manticore API spec
       const request: UpdateDocumentRequest = {
         table: resource,
         id: Number(id),
         doc: variables as any,
       };
 
-      const response: ManticoreSuccessResponse = await this.apiCall("/update", {
+      console.log('Executing UPDATE request:', request);
+      
+      await this.apiCall("/update", {
         method: "POST",
         body: JSON.stringify(request),
       });
@@ -241,13 +260,16 @@ class ManticoreDataProvider implements DataProvider {
   async deleteOne<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
     params: DeleteOneParams<TVariables>
   ): Promise<DeleteOneResponse<TData>> {
-    const { resource, id, meta } = params;
+    const { resource, id } = params;
     try {
+      // Build proper delete request according to Manticore API spec
       const request: DeleteDocumentRequest = {
         table: resource,
         id: Number(id),
       };
 
+      console.log('Executing DELETE request:', request);
+      
       await this.apiCall("/delete", {
         method: "POST",
         body: JSON.stringify(request),
@@ -265,8 +287,9 @@ class ManticoreDataProvider implements DataProvider {
   async deleteMany<TData extends BaseRecord = BaseRecord, TVariables = Record<string, any>>(
     params: DeleteManyParams<TVariables>
   ): Promise<DeleteManyResponse<TData>> {
-    const { resource, ids, meta } = params;
+    const { resource, ids } = params;
     try {
+      // For multiple deletes, we need to use individual requests since Manticore doesn't support bulk delete by IDs
       const results = await Promise.all(
         ids.map(async (id: any) => {
           const request: DeleteDocumentRequest = {
@@ -282,7 +305,7 @@ class ManticoreDataProvider implements DataProvider {
       );
 
       return {
-        data: results,
+        data: results as unknown as TData[],
       };
     } catch (error) {
       console.error("Error in deleteMany:", error);
@@ -299,6 +322,18 @@ class ManticoreDataProvider implements DataProvider {
   ): Promise<CustomResponse<TData>> => {
     const { url, method, payload, headers, meta } = params;
     
+    if (url.startsWith("/embeddings")) {
+      const result = await this.apiCall(url.replace('/embeddings', ''), {
+        method,
+        body: payload ? JSON.stringify(payload) : undefined,
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers
+        },
+      }, this.embeddingsBaseUrl);
+      return { data: result as unknown as TData };
+    }
+
     if (url === "/sql" && payload) {
       const sqlPayload = payload as any;
       // Handle both SELECT queries and other SQL commands

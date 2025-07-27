@@ -1,0 +1,1 @@
+export { VectorConfigModal } from './VectorConfigModal';

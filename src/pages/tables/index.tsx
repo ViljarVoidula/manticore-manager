@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useCustomMutation, useCreate, useUpdate, useDelete, useList, BaseRecord } from "@refinedev/core";
+import { useCustomMutation, useDelete, useList, BaseRecord } from "@refinedev/core";
 import { useParams, useNavigate, useSearchParams } from "react-router";
 import { TableInfo } from "../../types/manticore";
 import { TableCreator } from "../../components/table-creator/TableCreator";
 import { TableSchemaEditor } from "../../components/table-schema-editor";
+import { DocumentForm } from "../../components/forms";
+import { TableCellRenderer } from "../../components/table-cell-renderer";
 import { toastMessages } from "../../utils/toast";
 
 interface Document extends BaseRecord {
@@ -12,11 +14,12 @@ interface Document extends BaseRecord {
 }
 
 export const TablesPage: React.FC = () => {
+  const [previewedRecord, setPreviewedRecord] = useState<Document | null>(null);
+  const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selectedTable, setSelectedTable] = useState<TableInfo | null>(null);
   const [showCreateDocumentForm, setShowCreateDocumentForm] = useState(false);
   const [editingDocument, setEditingDocument] = useState<Document | null>(null);
-  const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSchemaEditor, setShowSchemaEditor] = useState(false);
@@ -29,8 +32,7 @@ export const TablesPage: React.FC = () => {
   const { mutate: fetchTables } = useCustomMutation();
   const { mutate: fetchTableInfo } = useCustomMutation();
   const { mutate: deleteTable } = useCustomMutation();
-  const { mutate: createDocument } = useCreate();
-  const { mutate: updateDocument } = useUpdate();
+  const { mutate: deleteTableVectorSettings } = useCustomMutation();
   const { mutate: deleteDocument } = useDelete();
 
   // Fetch documents for selected table
@@ -122,7 +124,33 @@ export const TablesPage: React.FC = () => {
               values: { command: `DROP TABLE ${tableName}` },
             },
             {
-              onSuccess: () => {
+              onSuccess: async () => {
+                // Clean up vector settings for this table
+                try {
+                  await new Promise<void>((resolveVector) => {
+                    deleteTableVectorSettings(
+                      {
+                        url: `/embeddings/vector-columns/tables/${tableName}`,
+                        method: "delete",
+                        values: {},
+                      },
+                      {
+                        onSuccess: () => {
+                          console.log(`Vector settings for table ${tableName} deleted successfully`);
+                          resolveVector();
+                        },
+                        onError: (error) => {
+                          console.error(`Failed to delete vector settings for table ${tableName}:`, error);
+                          // Don't fail the entire process if vector cleanup fails
+                          resolveVector();
+                        },
+                      }
+                    );
+                  });
+                } catch (error) {
+                  console.error(`Error deleting vector settings for table ${tableName}:`, error);
+                }
+                
                 loadTables();
                 if (tableId === tableName) {
                   navigate("/tables");
@@ -139,55 +167,6 @@ export const TablesPage: React.FC = () => {
       },
       'table'
     );
-  };
-
-  const initializeDocumentForm = () => {
-    const initialData: Record<string, unknown> = {};
-    if (selectedTable?.columns) {
-      selectedTable.columns.forEach((column) => {
-        if (column.field !== 'id') {
-          switch (column.type) {
-            case 'integer':
-            case 'bigint':
-              initialData[column.field] = 0;
-              break;
-            case 'float':
-              initialData[column.field] = 0.0;
-              break;
-            case 'bool':
-              initialData[column.field] = false;
-              break;
-            case 'json':
-              if (column.field === 'data') {
-                initialData[column.field] = {
-                  title: "Sample Document",
-                  content: "Document content here",
-                  tags: ["tag1", "tag2"]
-                };
-              } else {
-                initialData[column.field] = {};
-              }
-              break;
-            default:
-              initialData[column.field] = '';
-          }
-        }
-      });
-    }
-    return initialData;
-  };
-
-  const handleCreateDocument = () => {
-    const initialData = initializeDocumentForm();
-    setFormData(initialData);
-    setEditingDocument(null);
-    setShowCreateDocumentForm(true);
-  };
-
-  const handleEditDocument = (document: Document) => {
-    setFormData({ ...document });
-    setEditingDocument(document);
-    setShowCreateDocumentForm(true);
   };
 
   const handleDeleteDocument = async (id: string | number) => {
@@ -207,7 +186,7 @@ export const TablesPage: React.FC = () => {
                 refetchDocuments();
                 resolve();
               },
-              onError: (error) => {
+              onError: (error: unknown) => {
                 console.error('Failed to delete document:', error);
                 reject(error);
               },
@@ -219,55 +198,14 @@ export const TablesPage: React.FC = () => {
     );
   };
 
-  const handleSubmitDocument = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!tableId) return;
-
-    if (editingDocument) {
-      updateDocument(
-        {
-          resource: tableId,
-          id: editingDocument.id,
-          values: formData,
-        },
-        {
-          onSuccess: () => {
-            setShowCreateDocumentForm(false);
-            setEditingDocument(null);
-            refetchDocuments();
-            toastMessages.documentUpdated();
-          },
-          onError: (error) => {
-            toastMessages.generalError('update document', error);
-          },
-        }
-      );
-    } else {
-      createDocument(
-        {
-          resource: tableId,
-          values: formData,
-        },
-        {
-          onSuccess: () => {
-            setShowCreateDocumentForm(false);
-            refetchDocuments();
-            toastMessages.documentCreated();
-          },
-          onError: (error) => {
-            toastMessages.generalError('create document', error);
-          },
-        }
-      );
-    }
+  const handleCreateDocument = () => {
+    setEditingDocument(null);
+    setShowCreateDocumentForm(true);
   };
 
-  const handleInputChange = (field: string, value: unknown) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value,
-    }));
+  const handleEditDocument = (document: Document) => {
+    setEditingDocument(document);
+    setShowCreateDocumentForm(true);
   };
 
   const handleSearch = (e: React.FormEvent) => {
@@ -282,74 +220,6 @@ export const TablesPage: React.FC = () => {
     setTables(prev => prev.map(table => 
       table.name === updatedTable.name ? updatedTable : table
     ));
-  };
-
-  const renderFormField = (column: { field: string; type: string }) => {
-    const value = formData[column.field] || '';
-
-    switch (column.type) {
-      case 'integer':
-      case 'bigint':
-        return (
-          <input
-            type="number"
-            value={String(value)}
-            onChange={(e) => handleInputChange(column.field, parseInt(e.target.value) || 0)}
-            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        );
-      case 'float':
-        return (
-          <input
-            type="number"
-            step="any"
-            value={String(value)}
-            onChange={(e) => handleInputChange(column.field, parseFloat(e.target.value) || 0)}
-            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        );
-      case 'bool':
-        return (
-          <select
-            value={String(value)}
-            onChange={(e) => handleInputChange(column.field, e.target.value === 'true')}
-            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="false">False</option>
-            <option value="true">True</option>
-          </select>
-        );
-      case 'json':
-        return (
-          <div>
-            <textarea
-              value={typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
-              onChange={(e) => {
-                try {
-                  const parsed = JSON.parse(e.target.value);
-                  handleInputChange(column.field, parsed);
-                } catch {
-                  handleInputChange(column.field, e.target.value);
-                }
-              }}
-              placeholder="Enter valid JSON"
-              className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent h-32 font-mono text-sm"
-            />
-            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              💡 Make sure your JSON is properly formatted
-            </div>
-          </div>
-        );
-      default:
-        return (
-          <input
-            type="text"
-            value={String(value)}
-            onChange={(e) => handleInputChange(column.field, e.target.value)}
-            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        );
-    }
   };
 
   return (
@@ -375,14 +245,6 @@ export const TablesPage: React.FC = () => {
                 className="px-3 lg:px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-sm lg:text-base"
               >
                 Create Table
-              </button>
-            )}
-            {tableId && selectedTable && (
-              <button
-                onClick={() => setShowSchemaEditor(true)}
-                className="px-3 lg:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
-              >
-                Edit Schema
               </button>
             )}
             <button
@@ -429,15 +291,27 @@ export const TablesPage: React.FC = () => {
                           {table.columns?.length || 0} columns
                         </p>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteTable(table.name);
-                        }}
-                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 text-sm ml-2 flex-shrink-0"
-                      >
-                        Delete
-                      </button>
+                      <div className="flex items-center gap-2 ml-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTable(table);
+                            setShowSchemaEditor(true);
+                          }}
+                          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 text-sm flex-shrink-0 border border-blue-200 dark:border-blue-600 rounded px-2 py-1 bg-white dark:bg-gray-800"
+                        >
+                          Edit Schema
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTable(table.name);
+                          }}
+                          className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 text-sm flex-shrink-0 border border-red-200 dark:border-red-600 rounded px-2 py-1 bg-white dark:bg-gray-800"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -580,119 +454,178 @@ export const TablesPage: React.FC = () => {
             </div>
 
             {/* Documents Table */}
-            <div className="flex-1 overflow-auto p-4 lg:p-6 bg-white dark:bg-gray-800">
+            <div className="flex-1 flex overflow-auto p-4 lg:p-6 bg-white dark:bg-gray-800">
               {documentsData && documentsData.data.length > 0 ? (
-                <div>
-                  {/* Mobile: Card layout, Desktop: Table layout */}
-                  <div className="lg:hidden space-y-4">
-                    {documentsData.data.map((document, index) => (
-                      <div
-                        key={`doc-${document.id || 'no-id'}-${index}`}
-                        className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg border border-gray-200 dark:border-gray-600"
+                <div className="flex w-full h-full">
+                  {/* Table and Pagination */}
+                  <div className="flex-1 flex flex-col">
+                    {/* Mobile: Card layout */}
+                    <div className="lg:hidden space-y-4">
+                      {documentsData.data.map((document, index) => (
+                        <div
+                          key={`doc-${document.id || 'no-id'}-${index}`}
+                          className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg border border-gray-200 dark:border-gray-600"
+                          onClick={() => {
+                            setPreviewedRecord(document as Document);
+                            setShowDetailPanel(true);
+                          }}
+                        >
+                          {selectedTable?.columns?.map((column) => (
+                            <div key={column.field} className="mb-2 last:mb-0">
+                              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                {column.field}:
+                              </span>
+                              <div className="text-sm text-gray-900 dark:text-gray-100 mt-1 break-words">
+                                <TableCellRenderer 
+                                  value={document[column.field]}
+                                  columnField={column.field}
+                                  columnType={column.type}
+                                  tableName={selectedTable.name}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                          <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditDocument(document as Document);
+                              }}
+                              className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-xs"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                document.id && handleDeleteDocument(document.id);
+                              }}
+                              className="px-3 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-xs"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Desktop table view */}
+                    <div className="hidden lg:block overflow-x-auto">
+                      <table className="min-w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+                        <thead className="bg-gray-50 dark:bg-gray-700">
+                          <tr>
+                            {selectedTable?.columns?.map((column) => (
+                              <th
+                                key={column.field}
+                                className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600"
+                              >
+                                {column.field}
+                              </th>
+                            ))}
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600">
+                              Actions
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                          {documentsData.data.map((document, index) => (
+                            <tr
+                              key={`doc-${document.id || 'no-id'}-${index}`}
+                              className="hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer"
+                              onClick={() => {
+                                setPreviewedRecord(document as Document);
+                                setShowDetailPanel(true);
+                              }}
+                            >
+                              {selectedTable?.columns?.map((column) => (
+                                <td
+                                  key={column.field}
+                                  className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100 border-b border-gray-200 dark:border-gray-700 max-w-xs"
+                                >
+                                  <TableCellRenderer 
+                                    value={document[column.field]}
+                                    columnField={column.field}
+                                    columnType={column.type}
+                                    tableName={selectedTable.name}
+                                  />
+                                </td>
+                              ))}
+                              <td className="px-4 py-2 text-sm border-b border-gray-200 dark:border-gray-700">
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleEditDocument(document as Document);
+                                    }}
+                                    className="px-2 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-xs"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      document.id && handleDeleteDocument(document.id);
+                                    }}
+                                    className="px-2 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-xs"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* Pagination */}
+                    <div className="mt-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+                      <button
+                        onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                        disabled={currentPage === 1}
+                        className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
                       >
+                        Previous
+                      </button>
+                      <span className="text-xs lg:text-sm text-gray-600 dark:text-gray-400">
+                        Page {currentPage}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage(currentPage + 1)}
+                        disabled={!documentsData || documentsData.data.length < 10}
+                        className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                  {/* Detail Panel */}
+                  {showDetailPanel && previewedRecord && (
+                    <div className="w-full lg:w-96 h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-lg p-6 overflow-y-auto fixed lg:static right-0 top-0 z-40">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white">Record Details</h3>
+                        <button
+                          onClick={() => setShowDetailPanel(false)}
+                          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div className="space-y-4">
                         {selectedTable?.columns?.map((column) => (
-                          <div key={column.field} className="mb-2 last:mb-0">
-                            <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                              {column.field}:
-                            </span>
-                            <div className="text-sm text-gray-900 dark:text-gray-100 mt-1 break-words">
-                              {typeof document[column.field] === 'object'
-                                ? JSON.stringify(document[column.field])
-                                : String(document[column.field] || '')}
+                          <div key={column.field}>
+                            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase mb-1">{column.field}</div>
+                            <div className="text-sm text-gray-900 dark:text-gray-100 break-words">
+                              <TableCellRenderer 
+                                value={previewedRecord[column.field]}
+                                columnField={column.field}
+                                columnType={column.type}
+                                tableName={selectedTable.name}
+                              />
                             </div>
                           </div>
                         ))}
-                        <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
-                          <button
-                            onClick={() => handleEditDocument(document as Document)}
-                            className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-xs"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => document.id && handleDeleteDocument(document.id)}
-                            className="px-3 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-xs"
-                          >
-                            Delete
-                          </button>
-                        </div>
                       </div>
-                    ))}
-                  </div>
-
-                  {/* Desktop table view */}
-                  <div className="hidden lg:block overflow-x-auto">
-                    <table className="min-w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-                      <thead className="bg-gray-50 dark:bg-gray-700">
-                        <tr>
-                          {selectedTable?.columns?.map((column) => (
-                            <th
-                              key={column.field}
-                              className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600"
-                            >
-                              {column.field}
-                            </th>
-                          ))}
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                        {documentsData.data.map((document, index) => (
-                          <tr key={`doc-${document.id || 'no-id'}-${index}`} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                            {selectedTable?.columns?.map((column) => (
-                              <td
-                                key={column.field}
-                                className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100 border-b border-gray-200 dark:border-gray-700 max-w-xs truncate"
-                              >
-                                {typeof document[column.field] === 'object'
-                                  ? JSON.stringify(document[column.field])
-                                  : String(document[column.field] || '')}
-                              </td>
-                            ))}
-                            <td className="px-4 py-2 text-sm border-b border-gray-200 dark:border-gray-700">
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleEditDocument(document as Document)}
-                                  className="px-2 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-xs"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  onClick={() => document.id && handleDeleteDocument(document.id)}
-                                  className="px-2 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-xs"
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Pagination */}
-                  <div className="mt-4 flex flex-col sm:flex-row justify-between items-center gap-4">
-                    <button
-                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                      disabled={currentPage === 1}
-                      className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
-                    >
-                      Previous
-                    </button>
-                    <span className="text-xs lg:text-sm text-gray-600 dark:text-gray-400">
-                      Page {currentPage}
-                    </span>
-                    <button
-                      onClick={() => setCurrentPage(currentPage + 1)}
-                      disabled={!documentsData || documentsData.data.length < 10}
-                      className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
-                    >
-                      Next
-                    </button>
-                  </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-12">
@@ -723,69 +656,21 @@ export const TablesPage: React.FC = () => {
       />
 
       {/* Document Form Modal */}
-      {showCreateDocumentForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="p-4 lg:p-6">
-              <div className="flex items-center justify-between mb-4 lg:mb-6">
-                <h3 className="text-lg lg:text-xl font-bold text-gray-900 dark:text-white">
-                  {editingDocument ? 'Edit Document' : 'Create Document'}
-                </h3>
-                <button
-                  onClick={() => {
-                    setShowCreateDocumentForm(false);
-                    setEditingDocument(null);
-                  }}
-                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 p-1"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={handleSubmitDocument} className="space-y-3 lg:space-y-4">
-                {selectedTable?.columns
-                  ?.filter(column => column.field !== 'id' || editingDocument)
-                  .map((column) => (
-                    <div key={column.field}>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                        {column.field} ({column.type})
-                        {column.field === 'id' && editingDocument && ' (read-only)'}
-                      </label>
-                      {column.field === 'id' && editingDocument ? (
-                        <input
-                          type="text"
-                          value={String(formData[column.field] || '')}
-                          disabled
-                          className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100 text-sm lg:text-base"
-                        />
-                      ) : (
-                        renderFormField(column)
-                      )}
-                    </div>
-                  ))}
-
-                <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCreateDocumentForm(false);
-                      setEditingDocument(null);
-                    }}
-                    className="w-full sm:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 text-sm lg:text-base"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-sm lg:text-base"
-                  >
-                    {editingDocument ? 'Update' : 'Create'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
+      {showCreateDocumentForm && selectedTable && (
+        <DocumentForm
+          isOpen={showCreateDocumentForm}
+          onClose={() => {
+            setShowCreateDocumentForm(false);
+            setEditingDocument(null);
+          }}
+          onSuccess={() => {
+            setShowCreateDocumentForm(false);
+            setEditingDocument(null);
+            refetchDocuments();
+          }}
+          table={selectedTable}
+          editingDocument={editingDocument}
+        />
       )}
 
       {/* Schema Editor Modal */}

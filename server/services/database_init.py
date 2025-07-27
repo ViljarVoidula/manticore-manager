@@ -119,9 +119,6 @@ id bigint,
 tbl_name text,
 col_name text,
 mdl_name text,
-dimensions integer,
-knn_algo text,
-similarity_algo text,
 combined_fields json,
 created_at bigint,
 updated_at bigint
@@ -191,57 +188,86 @@ updated_at bigint
         table_name: str,
         column_name: str,
         model_name: str,
-        dimensions: int,
-        knn_type: str = "HNSW",
-        similarity_metric: str = "L2",
         combined_fields: Optional[Dict[str, Any]] = None
     ) -> None:
         """Save vector column settings to the metadata table."""
         try:
-            # Check if record already exists (use SELECT via /sql)
-            check_sql = f"""
-            SELECT id FROM manager_vector_column_settings 
-            WHERE tbl_name = '{table_name}' AND col_name = '{column_name}'
-            """
+            logger.info(f"Saving vector column settings for {table_name}.{column_name} with model {model_name}")
+            logger.info(f"Combined fields data: {combined_fields}")
             
-            existing = await self._execute_sql(check_sql)
-            current_time = int(time.time())  # Unix timestamp
+            # Force create the table if it doesn't exist
+            table_name_meta = "manager_vector_column_settings"
+            create_sql = f"""CREATE TABLE IF NOT EXISTS {table_name_meta} (
+id bigint,
+tbl_name text,
+col_name text,
+mdl_name text,
+combined_fields json,
+created_at bigint,
+updated_at bigint
+)"""
             
-            # Prepare combined_fields JSON
-            combined_fields_json = "NULL"
+            logger.info(f"Ensuring table exists with SQL: {create_sql}")
+            try:
+                await self._execute_cli_query(create_sql)
+                logger.info("Table creation/check completed")
+            except Exception as create_error:
+                logger.warning(f"Table creation failed, but continuing: {create_error}")
+            
+            # Simple escaping for values
+            def simple_escape(value: str) -> str:
+                return value.replace("'", "''")  # SQL standard way to escape single quotes
+            
+            table_name_escaped = simple_escape(table_name)
+            column_name_escaped = simple_escape(column_name)  
+            model_name_escaped = simple_escape(model_name)
+            
+            current_time = int(time.time())
+            record_id = int(time.time() * 1000000)  # microsecond timestamp
+            
+            # Handle JSON data - use simple approach
+            combined_fields_value = "NULL"
             if combined_fields:
-                combined_fields_json = f"'{json.dumps(combined_fields)}'"
+                json_str = json.dumps(combined_fields)
+                # Simple escape for JSON
+                json_escaped = json_str.replace("'", "''")
+                combined_fields_value = f"'{json_escaped}'"
+                logger.info(f"JSON value: {combined_fields_value}")
             
-            if existing and existing.get("hits", {}).get("hits"):
-                # Update existing record (use /cli_json for UPDATE)
-                update_sql = f"""
-                UPDATE manager_vector_column_settings 
-                SET mdl_name = '{model_name}',
-                    dimensions = {dimensions},
-                    knn_algo = '{knn_type}',
-                    similarity_algo = '{similarity_metric}',
-                    combined_fields = {combined_fields_json},
-                    updated_at = {current_time}
-                WHERE tbl_name = '{table_name}' AND col_name = '{column_name}'
-                """
-                await self._execute_cli_query(update_sql)
-                logger.info(f"Updated vector column settings for {table_name}.{column_name}")
-            else:
-                # Insert new record (use /cli_json for INSERT)
-                # Generate a unique ID (timestamp-based)
-                record_id = int(time.time() * 1000000)  # microsecond timestamp
-                
-                insert_sql = f"""
-                INSERT INTO manager_vector_column_settings 
-                (id, tbl_name, col_name, mdl_name, dimensions, knn_algo, similarity_algo, combined_fields, created_at, updated_at)
-                VALUES 
-                ({record_id}, '{table_name}', '{column_name}', '{model_name}', {dimensions}, '{knn_type}', '{similarity_metric}', {combined_fields_json}, {current_time}, {current_time})
-                """
+            # Try INSERT first (simpler approach)
+            insert_sql = f"""INSERT INTO {table_name_meta} 
+(id, tbl_name, col_name, mdl_name, combined_fields, created_at, updated_at) 
+VALUES 
+({record_id}, '{table_name_escaped}', '{column_name_escaped}', '{model_name_escaped}', {combined_fields_value}, {current_time}, {current_time})"""
+            
+            logger.info(f"Executing INSERT SQL: {insert_sql}")
+            
+            try:
                 await self._execute_cli_query(insert_sql)
-                logger.info(f"Saved vector column settings for {table_name}.{column_name}")
+                logger.info(f"Successfully saved vector column settings for {table_name}.{column_name}")
+            except Exception as insert_error:
+                logger.warning(f"INSERT failed, might be duplicate. Error: {insert_error}")
+                
+                # Try UPDATE instead
+                update_sql = f"""UPDATE {table_name_meta} 
+SET mdl_name = '{model_name_escaped}', 
+    combined_fields = {combined_fields_value}, 
+    updated_at = {current_time} 
+WHERE tbl_name = '{table_name_escaped}' AND col_name = '{column_name_escaped}'"""
+                
+                logger.info(f"Executing UPDATE SQL: {update_sql}")
+                await self._execute_cli_query(update_sql)
+                logger.info(f"Successfully updated vector column settings for {table_name}.{column_name}")
                 
         except Exception as e:
             logger.error(f"Error saving vector column settings: {str(e)}")
+            # Try to get more error details
+            if hasattr(e, 'response'):
+                try:
+                    error_text = await e.response.aread() if hasattr(e.response, 'aread') else e.response.text
+                    logger.error(f"Response details: {error_text}")
+                except:
+                    logger.error(f"Could not read response details")
             raise
     
     async def get_vector_column_settings(self, table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
@@ -260,9 +286,6 @@ updated_at bigint
                     "table_name": result.get("tbl_name"),
                     "column_name": result.get("col_name"),
                     "model_name": result.get("mdl_name"),
-                    "dimensions": result.get("dimensions"),
-                    "knn_type": result.get("knn_algo"),
-                    "similarity_metric": result.get("similarity_algo"),
                     "combined_fields": result.get("combined_fields"),
                     "created_at": result.get("created_at"),
                     "updated_at": result.get("updated_at")
@@ -298,7 +321,7 @@ updated_at bigint
         """Get all vector columns for a specific table."""
         try:
             query = f"""
-            SELECT col_name, mdl_name, dimensions, knn_algo, similarity_algo, combined_fields 
+            SELECT col_name, mdl_name, combined_fields 
             FROM manager_vector_column_settings 
             WHERE tbl_name = '{table_name}'
             """
@@ -312,9 +335,6 @@ updated_at bigint
                     mapped_row = {
                         "column_name": row.get("col_name"),
                         "model_name": row.get("mdl_name"),
-                        "dimensions": row.get("dimensions"),
-                        "knn_type": row.get("knn_algo"),
-                        "similarity_metric": row.get("similarity_algo"),
                         "combined_fields": row.get("combined_fields")
                     }
                     # Parse JSON combined_fields if present
@@ -330,6 +350,34 @@ updated_at bigint
         except Exception as e:
             logger.error(f"Error getting table vector columns: {str(e)}")
             return []
+
+    async def delete_vector_column_settings(self, table_name: str, column_name: str) -> None:
+        """Delete vector column settings for a specific table and column."""
+        try:
+            delete_sql = f"""
+            DELETE FROM manager_vector_column_settings 
+            WHERE tbl_name = '{table_name}' AND col_name = '{column_name}'
+            """
+            await self._execute_cli_query(delete_sql)
+            logger.info(f"Deleted vector column settings for {table_name}.{column_name}")
+            
+        except Exception as e:
+            logger.error(f"Error deleting vector column settings: {str(e)}")
+            raise
+
+    async def delete_table_vector_settings(self, table_name: str) -> None:
+        """Delete all vector column settings for a specific table."""
+        try:
+            delete_sql = f"""
+            DELETE FROM manager_vector_column_settings 
+            WHERE tbl_name = '{table_name}'
+            """
+            await self._execute_cli_query(delete_sql)
+            logger.info(f"Deleted all vector column settings for table {table_name}")
+            
+        except Exception as e:
+            logger.error(f"Error deleting table vector settings: {str(e)}")
+            raise
 
 
 # Global database initializer instance
