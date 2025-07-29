@@ -414,8 +414,50 @@ export const SearchFilter: React.FC<SearchFilterProps> = ({
         }
       }
       
+      // If no vector was generated (no text/image input), use a reference vector from the database
       if (generatedVector.length === 0) {
-        console.warn('⚠️ No vector generated, aborting search');
+        console.log('🎯 No input provided, getting reference vector from database for similarity search');
+        try {
+          // Get a reference vector from the first document in the table
+          const referenceResponse = await dp.getList({
+            resource: table.name,
+            pagination: { current: 1, pageSize: 1 },
+            filters: [
+              {
+                field: vectorConfig.field,
+                operator: 'ne' as any,
+                value: null
+              }
+            ]
+          });
+          
+          if (referenceResponse.data.length > 0) {
+            const referenceDoc = referenceResponse.data[0];
+            const vectorData = (referenceDoc as any)[vectorConfig.field];
+            
+            if (vectorData) {
+              // Parse vector data if it's in string format
+              if (typeof vectorData === 'string') {
+                const cleanStr = vectorData.trim();
+                if (cleanStr.startsWith('(') && cleanStr.endsWith(')')) {
+                  generatedVector = cleanStr.slice(1, -1).split(',').map(v => parseFloat(v.trim()));
+                } else {
+                  generatedVector = cleanStr.split(',').map(v => parseFloat(v.trim()));
+                }
+              } else if (Array.isArray(vectorData)) {
+                generatedVector = vectorData.map(v => parseFloat(v));
+              }
+              
+              console.log(`✅ Using reference vector with ${generatedVector.length} dimensions from document ID: ${referenceDoc.id}`);
+            }
+          }
+        } catch (error) {
+          console.error('❌ Failed to get reference vector:', error);
+        }
+      }
+      
+      if (generatedVector.length === 0) {
+        console.warn('⚠️ No vector generated and no reference vector found, aborting search');
         setIsSearchLoading(false);
         return;
       }
@@ -708,7 +750,7 @@ export const SearchFilter: React.FC<SearchFilterProps> = ({
               {/* Text input for hybrid vector search */}
               <input
                 type="text"
-                placeholder="Enter text for hybrid search (semantic + keyword)..."
+                placeholder="Enter text for hybrid search or leave empty for pure vector similarity..."
                 value={textSearchInput}
                 onChange={(e) => setTextSearchInput(e.target.value)}
                 className="flex-1 px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded focus:ring-1 focus:ring-purple-500 focus:border-transparent"
@@ -955,7 +997,7 @@ export const SearchFilter: React.FC<SearchFilterProps> = ({
           {/* Action Buttons */}
           <button
             onClick={searchType === 'basic' ? handleBasicSearch : searchType === 'vector' ? handleVectorSearch : handleAdvancedSearch}
-            disabled={searchType === 'basic' ? !basicQuery : searchType === 'vector' ? (!textSearchInput && !imageSearchInput) || !vectorConfig.field : advancedFilters.length === 0}
+            disabled={searchType === 'basic' ? !basicQuery : searchType === 'vector' ? !vectorConfig.field : advancedFilters.length === 0}
             className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             Search

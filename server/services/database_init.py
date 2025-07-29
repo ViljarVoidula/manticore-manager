@@ -320,16 +320,27 @@ WHERE tbl_name = '{table_name_escaped}' AND col_name = '{column_name_escaped}'""
     async def get_table_vector_columns(self, table_name: str) -> list:
         """Get all vector columns for a specific table."""
         try:
-            query = f"""
-            SELECT col_name, mdl_name, combined_fields 
-            FROM manager_vector_column_settings 
-            WHERE tbl_name = '{table_name}'
-            """
+            # Use search API instead of SQL to avoid syntax issues
+            search_request = {
+                "table": "manager_vector_column_settings",
+                "query": {
+                    "match": {"tbl_name": table_name}
+                },
+                "limit": 100
+            }
             
-            response = await self._execute_sql(query)
-            if response and response.get("hits", {}).get("hits"):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.manticore_url}/search",
+                    json=search_request,
+                    headers={"Content-Type": "application/json"}
+                )
+                response.raise_for_status()
+                search_response = response.json()
+            
+            if search_response and search_response.get("hits", {}).get("hits"):
                 results = []
-                for hit in response["hits"]["hits"]:
+                for hit in search_response["hits"]["hits"]:
                     row = hit["_source"]
                     # Map internal column names back to external names
                     mapped_row = {
@@ -340,7 +351,8 @@ WHERE tbl_name = '{table_name_escaped}' AND col_name = '{column_name_escaped}'""
                     # Parse JSON combined_fields if present
                     if mapped_row.get("combined_fields"):
                         try:
-                            mapped_row["combined_fields"] = json.loads(mapped_row["combined_fields"])
+                            if isinstance(mapped_row["combined_fields"], str):
+                                mapped_row["combined_fields"] = json.loads(mapped_row["combined_fields"])
                         except (json.JSONDecodeError, TypeError):
                             mapped_row["combined_fields"] = None
                     results.append(mapped_row)

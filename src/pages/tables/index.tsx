@@ -8,6 +8,7 @@ import { DocumentForm } from "../../components/forms";
 import { TableCellRenderer } from "../../components/table-cell-renderer";
 import { DataImportModal } from "../../components/data-import-modal";
 import { SearchFilter, SearchParams } from "../../components/search-filter";
+import { RecommendationsPanel } from "../../components/recommendations";
 import { toastMessages } from "../../utils/toast";
 
 interface Document extends BaseRecord {
@@ -18,6 +19,7 @@ interface Document extends BaseRecord {
 export const TablesPage: React.FC = () => {
   const [previewedRecord, setPreviewedRecord] = useState<Document | null>(null);
   const [showDetailPanel, setShowDetailPanel] = useState(false);
+  const [showRecommendationsPanel, setShowRecommendationsPanel] = useState(false);
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selectedTable, setSelectedTable] = useState<TableInfo | null>(null);
   
@@ -43,11 +45,14 @@ export const TablesPage: React.FC = () => {
   const [searchFacets, setSearchFacets] = useState<Record<string, any> | null>(null);
   const [appliedFacetFilters, setAppliedFacetFilters] = useState<Record<string, string[]>>({});
   const [facetsExpanded, setFacetsExpanded] = useState(true);
+  const [navigationHistory, setNavigationHistory] = useState<Document[]>([]);
   
   const { tableId } = useParams();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const shouldShowCreateTable = searchParams.get('create') === 'true';
+  const selectedRecordId = searchParams.get('record');
+  const showRecommendations = searchParams.get('recommendations') === 'true';
 
   const { mutate: fetchTables } = useCustomMutation();
   const { mutate: fetchTableInfo } = useCustomMutation();
@@ -149,8 +154,106 @@ export const TablesPage: React.FC = () => {
     }
   }, [tableId, loadTableInfo]);
 
+  // Restore selected record from URL parameters
+  useEffect(() => {
+    if (selectedRecordId && documentsData?.data && !previewedRecord) {
+      const record = documentsData.data.find(doc => String(doc.id) === selectedRecordId);
+      if (record) {
+        setPreviewedRecord(record as Document);
+        setShowDetailPanel(true);
+        setShowRecommendationsPanel(showRecommendations);
+      }
+    }
+  }, [selectedRecordId, documentsData?.data, previewedRecord, showRecommendations]);
+
   const handleTableSelect = (tableName: string) => {
     navigate(`/tables/${tableName}`);
+  };
+
+  // Handle record selection with URL update
+  const handleRecordSelect = (record: Document, showRecs: boolean = false) => {
+    console.log('📝 handleRecordSelect called:', {
+      newRecordId: record.id,
+      showRecs: showRecs,
+      currentPreviewedId: previewedRecord?.id,
+      recordData: record
+    });
+    
+    // Add current record to navigation history if we have a previous record
+    if (previewedRecord && showRecs) {
+      console.log('📚 Adding to navigation history:', previewedRecord.id);
+      setNavigationHistory(prev => [...prev, previewedRecord]);
+    }
+    
+    setPreviewedRecord(record);
+    
+    // Update URL with selected record
+    const newSearchParams = new URLSearchParams(searchParams);
+    newSearchParams.set('record', String(record.id));
+    
+    if (showRecs) {
+      newSearchParams.set('recommendations', 'true');
+      setShowRecommendationsPanel(true);
+    } else {
+      newSearchParams.delete('recommendations');
+      setShowRecommendationsPanel(false);
+      // Clear navigation history when not in recommendations mode
+      setNavigationHistory([]);
+    }
+    
+    console.log('🔗 Updating URL to record:', record.id);
+    setSearchParams(newSearchParams);
+    setShowDetailPanel(true);
+  };
+
+  // Handle going back to previous record in navigation history
+  const handleGoBack = useCallback(() => {
+    if (navigationHistory.length > 0) {
+      const previousRecord = navigationHistory[navigationHistory.length - 1];
+      const newHistory = navigationHistory.slice(0, -1);
+      
+      setNavigationHistory(newHistory);
+      setPreviewedRecord(previousRecord);
+      
+      // Update URL
+      const newSearchParams = new URLSearchParams(searchParams);
+      newSearchParams.set('record', String(previousRecord.id));
+      setSearchParams(newSearchParams);
+    }
+  }, [navigationHistory, searchParams, setSearchParams]);
+
+  // Handle closing panels and clearing URL params
+  const handleClosePanels = useCallback(() => {
+    // Clear record first to prevent intermediate renders
+    setPreviewedRecord(null);
+    
+    // Then hide panels
+    setShowDetailPanel(false);
+    setShowRecommendationsPanel(false);
+    
+    // Clean up navigation history
+    setNavigationHistory([]);
+    
+    // Finally update URL
+    const newSearchParams = new URLSearchParams(searchParams);
+    newSearchParams.delete('record');
+    newSearchParams.delete('recommendations');
+    setSearchParams(newSearchParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // Handle switching between detail and recommendations
+  const handleToggleRecommendations = () => {
+    const newSearchParams = new URLSearchParams(searchParams);
+    
+    if (showRecommendationsPanel) {
+      newSearchParams.delete('recommendations');
+      setShowRecommendationsPanel(false);
+    } else {
+      newSearchParams.set('recommendations', 'true');
+      setShowRecommendationsPanel(true);
+    }
+    
+    setSearchParams(newSearchParams);
   };
 
   const handleDeleteTable = async (tableName: string) => {
@@ -741,11 +844,8 @@ export const TablesPage: React.FC = () => {
                       {documentsData.data.map((document, index) => (
                         <div
                           key={`doc-${document.id || 'no-id'}-${index}`}
-                          className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg border border-gray-200 dark:border-gray-600"
-                          onClick={() => {
-                            setPreviewedRecord(document as Document);
-                            setShowDetailPanel(true);
-                          }}
+                          className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg border border-gray-200 dark:border-gray-600 cursor-pointer"
+                          onClick={() => handleRecordSelect(document as Document)}
                         >
                           {selectedTable?.columns?.map((column) => (
                             <div key={column.field} className="mb-2 last:mb-0">
@@ -827,10 +927,7 @@ export const TablesPage: React.FC = () => {
                             <tr
                               key={`doc-${document.id || 'no-id'}-${index}`}
                               className="hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer"
-                              onClick={() => {
-                                setPreviewedRecord(document as Document);
-                                setShowDetailPanel(true);
-                              }}
+                              onClick={() => handleRecordSelect(document as Document)}
                             >
                               {selectedTable?.columns?.map((column) => (
                                 <td
@@ -858,7 +955,7 @@ export const TablesPage: React.FC = () => {
                                 </td>
                               )}
                               <td className="px-4 py-2 text-sm border-b border-gray-200 dark:border-gray-700">
-                                <div className="flex gap-2">
+                                <div className="flex gap-1">
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -905,17 +1002,26 @@ export const TablesPage: React.FC = () => {
                       </button>
                     </div>
                   </div>
-                  {/* Detail Panel */}
-                  {showDetailPanel && previewedRecord && (
+                  {/* Detail Panel or Recommendations Panel */}
+                  {previewedRecord && showDetailPanel && !showRecommendationsPanel && (
                     <div className="w-full lg:w-96 h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-lg p-6 overflow-y-auto fixed lg:static right-0 top-0 z-40">
                       <div className="flex items-center justify-between mb-4">
                         <h3 className="text-lg font-bold text-gray-900 dark:text-white">Record Details</h3>
-                        <button
-                          onClick={() => setShowDetailPanel(false)}
-                          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                        >
-                          ✕
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleToggleRecommendations}
+                            className="px-2 py-1 bg-purple-600 text-white rounded-md hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 text-xs"
+                            title="Find similar items"
+                          >
+                            Similar
+                          </button>
+                          <button
+                            onClick={handleClosePanels}
+                            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
                       <div className="space-y-4">
                         {selectedTable?.columns?.map((column) => (
@@ -933,6 +1039,26 @@ export const TablesPage: React.FC = () => {
                         ))}
                       </div>
                     </div>
+                  )}
+                  
+                  {/* Recommendations Panel */}
+                  {previewedRecord && selectedTable && showRecommendationsPanel && (
+                    <RecommendationsPanel
+                      selectedRecord={previewedRecord}
+                      table={selectedTable}
+                      isVisible={showRecommendationsPanel}
+                      onClose={handleClosePanels}
+                      onSelectRecommendation={(record) => {
+                        console.log('🔄 onSelectRecommendation called:', {
+                          newRecordId: record.id,
+                          currentPreviewedId: previewedRecord?.id,
+                          showRecommendationsPanel: showRecommendationsPanel
+                        });
+                        // When selecting a recommendation, keep the recommendations panel open
+                        handleRecordSelect(record as Document, true);
+                      }}
+                      onGoBack={navigationHistory.length > 0 ? handleGoBack : undefined}
+                    />
                   )}
                 </div>
               ) : (

@@ -10,6 +10,7 @@ import uvicorn
 
 from .config import settings
 from .routers.embeddings import router as embeddings_router
+from .routers.recommendations import router as recommendations_router
 from .services.database_init import database_initializer
 
 
@@ -40,6 +41,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(embeddings_router)
+app.include_router(recommendations_router)
 
 
 @app.get("/")

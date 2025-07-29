@@ -358,7 +358,13 @@ class ManticoreDataProvider implements DataProvider {
           body: JSON.stringify(searchRequest),
         });
 
-        const result: GetListResponse<TData> & { facets?: typeof response.aggregations } = {
+        console.log('📊 Vector search response:', {
+          total: response.hits.total,
+          hits_count: response.hits.hits.length,
+          had_hybrid_query: !!hybridQuery.trim()
+        });
+
+        let result: GetListResponse<TData> & { facets?: typeof response.aggregations } = {
           data: response.hits.hits.map((hit) => ({
             id: hit._id,
             ...hit._source,
@@ -370,6 +376,101 @@ class ManticoreDataProvider implements DataProvider {
 
         if (response.aggregations) {
           result.facets = response.aggregations;
+        }
+        
+        // Check if hybrid search returned 0 hits and we had a query string - fallback to pure vector search
+        if (result.total === 0 && hybridQuery.trim()) {
+          console.log('🔄 Hybrid vector search returned 0 hits, attempting pure vector search fallback...');
+          
+          try {
+            // Create pure vector search request without query_string filter
+            const pureVectorRequest: ManticoreSearchRequest = {
+              index: resource,
+              knn: {
+                field: vectorSearch.field,
+                query_vector: vectorSearch.vector,
+                k: vectorSearch.k,
+                ef: vectorSearch.ef,
+              },
+              size: limit,
+              from: offset,
+              track_scores: true,
+            };
+
+            // Apply facet filters but NOT the query string
+            if (searchParams.appliedFacetFilters && Object.keys(searchParams.appliedFacetFilters).length > 0) {
+              console.log('Applying facet filters to pure vector search:', searchParams.appliedFacetFilters);
+              
+              const facetFilterClauses = Object.entries(searchParams.appliedFacetFilters).map(([fieldName, values]) => {
+                const stringValues = values as string[];
+                if (stringValues.length === 1) {
+                  return { equals: { [fieldName]: stringValues[0] } };
+                } else {
+                  return { bool: { should: stringValues.map((value: string) => ({ equals: { [fieldName]: value } })) } };
+                }
+              });
+
+              if (facetFilterClauses.length === 1) {
+                pureVectorRequest.knn!.filter = facetFilterClauses[0];
+              } else if (facetFilterClauses.length > 1) {
+                pureVectorRequest.knn!.filter = { bool: { must: facetFilterClauses } };
+              }
+            }
+
+            // Add facets if specified
+            if (searchParams.facets && searchParams.facets.length > 0) {
+              pureVectorRequest.aggs = {};
+              searchParams.facets.forEach((facet: { field: string; size?: number; order?: 'asc' | 'desc' }, index: number) => {
+                const aggName = `facet_${facet.field}_${index}`;
+                if (pureVectorRequest.aggs) {
+                  pureVectorRequest.aggs[aggName] = {
+                    terms: { field: facet.field, size: facet.size || 20 }
+                  };
+                  if (facet.order && pureVectorRequest.aggs[aggName].terms) {
+                    pureVectorRequest.aggs[aggName].terms.order = { _count: facet.order };
+                  }
+                }
+              });
+            }
+
+            console.log('🚀 Executing pure vector search fallback:', JSON.stringify(pureVectorRequest, null, 2));
+
+            const pureVectorResponse: ManticoreSearchResponse = await this.apiCall("/search", {
+              method: "POST",
+              body: JSON.stringify(pureVectorRequest),
+            });
+
+            console.log('📊 Pure vector search fallback response:', {
+              total: pureVectorResponse.hits.total,
+              hits_count: pureVectorResponse.hits.hits.length
+            });
+
+            if (pureVectorResponse.hits.total > 0) {
+              console.log(`✅ Pure vector search fallback found ${pureVectorResponse.hits.total} results`);
+              
+              result = {
+                data: pureVectorResponse.hits.hits.map((hit) => ({
+                  id: hit._id,
+                  ...hit._source,
+                  _score: hit._score,
+                  _knn_dist: hit._knn_dist,
+                  _fallback_search: true, // Mark as fallback results
+                })) as unknown as TData[],
+                total: pureVectorResponse.hits.total,
+                _fallback_message: 'Falling back to vector search for results' // Add fallback message
+              };
+
+              // Add facets from pure vector search
+              if (pureVectorResponse.aggregations) {
+                result.facets = pureVectorResponse.aggregations;
+              }
+            } else {
+              console.log('⚠️ Pure vector search fallback also returned 0 results');
+            }
+          } catch (fallbackError) {
+            console.error('❌ Pure vector search fallback failed:', fallbackError);
+            // Continue with original empty result
+          }
         }
         
         return result;
